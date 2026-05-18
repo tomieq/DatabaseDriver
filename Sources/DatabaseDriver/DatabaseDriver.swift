@@ -22,28 +22,129 @@ public enum DatabaseError: Error {
     case serverError(code: Int, message: String)
 }
 
-public enum DatabaseValue: Equatable, Sendable, CustomStringConvertible {
+public enum DatabaseColumnType: Equatable, Sendable {
+    case decimal
+    case tinyInteger
+    case smallInteger
+    case integer
+    case float
+    case double
     case null
-    case string(String)
+    case timestamp
+    case bigInteger
+    case mediumInteger
+    case date
+    case time
+    case dateTime
+    case year
+    case varchar
+    case bit
+    case json
+    case enumValue
+    case set
+    case blob
+    case varString
+    case string
+    case geometry
+    case unknown(UInt8)
+}
 
-    public var stringValue: String? {
-        guard case let .string(value) = self else { return nil }
-        return value
+public struct DatabaseDate: Equatable, Sendable, CustomStringConvertible {
+    public let year: Int
+    public let month: Int
+    public let day: Int
+
+    public init(year: Int, month: Int, day: Int) {
+        self.year = year
+        self.month = month
+        self.day = day
+    }
+
+    public var description: String { String(format: "%04d-%02d-%02d", self.year, self.month, self.day) }
+}
+
+public struct DatabaseTime: Equatable, Sendable, CustomStringConvertible {
+    public let isNegative: Bool
+    public let hours: Int
+    public let minutes: Int
+    public let seconds: Int
+    public let microseconds: Int
+
+    public init(isNegative: Bool = false, hours: Int, minutes: Int, seconds: Int, microseconds: Int = 0) {
+        self.isNegative = isNegative
+        self.hours = hours
+        self.minutes = minutes
+        self.seconds = seconds
+        self.microseconds = microseconds
     }
 
     public var description: String {
+        let prefix = self.isNegative ? "-" : ""
+        let base = String(format: "%@%02d:%02d:%02d", prefix, self.hours, self.minutes, self.seconds)
+        if self.microseconds == 0 { return base }
+        return base + String(format: ".%06d", self.microseconds)
+    }
+}
+
+public struct DatabaseDateTime: Equatable, Sendable, CustomStringConvertible {
+    public let date: DatabaseDate
+    public let time: DatabaseTime
+
+    public init(date: DatabaseDate, time: DatabaseTime) {
+        self.date = date
+        self.time = time
+    }
+
+    public var description: String { "\(self.date) \(self.time)" }
+}
+
+public enum DatabaseValue: Equatable, Sendable, CustomStringConvertible {
+    case null
+    case bool(Bool)
+    case integer(Int64)
+    case unsignedInteger(UInt64)
+    case double(Double)
+    case decimal(String)
+    case string(String)
+    case bytes(Data)
+    case date(DatabaseDate)
+    case time(DatabaseTime)
+    case dateTime(DatabaseDateTime)
+
+    public var stringValue: String? {
         switch self {
-        case .null: return "NULL"
+        case .null: return nil
+        case let .bool(value): return value ? "1" : "0"
+        case let .integer(value): return String(value)
+        case let .unsignedInteger(value): return String(value)
+        case let .double(value): return String(value)
+        case let .decimal(value): return value
         case let .string(value): return value
+        case let .bytes(value): return String(data: value, encoding: .utf8)
+        case let .date(value): return value.description
+        case let .time(value): return value.description
+        case let .dateTime(value): return value.description
         }
+    }
+
+    public var description: String {
+        self.stringValue ?? "NULL"
     }
 }
 
 public struct DatabaseColumn: Equatable, Sendable {
     public let name: String
+    public let type: DatabaseColumnType
+    public let isUnsigned: Bool
+    public let isBinary: Bool
+    public let length: UInt32
 
-    public init(name: String) {
+    public init(name: String, type: DatabaseColumnType = .string, isUnsigned: Bool = false, isBinary: Bool = false, length: UInt32 = 0) {
         self.name = name
+        self.type = type
+        self.isUnsigned = isUnsigned
+        self.isBinary = isBinary
+        self.length = length
     }
 }
 
@@ -62,6 +163,50 @@ public struct DatabaseRow: Equatable, Sendable {
 
     public func string(_ column: String) -> String? {
         self[column]?.stringValue
+    }
+
+    public func bool(_ column: String) -> Bool? {
+        switch self[column] {
+        case let .bool(value): return value
+        case let .integer(value): return value != 0
+        case let .unsignedInteger(value): return value != 0
+        case let .string(value): return value == "1" || value.lowercased() == "true"
+        default: return nil
+        }
+    }
+
+    public func integer(_ column: String) -> Int64? {
+        switch self[column] {
+        case let .integer(value): return value
+        case let .unsignedInteger(value): return Int64(exactly: value)
+        case let .string(value): return Int64(value)
+        default: return nil
+        }
+    }
+
+    public func unsignedInteger(_ column: String) -> UInt64? {
+        switch self[column] {
+        case let .unsignedInteger(value): return value
+        case let .integer(value): return UInt64(exactly: value)
+        case let .string(value): return UInt64(value)
+        default: return nil
+        }
+    }
+
+    public func double(_ column: String) -> Double? {
+        switch self[column] {
+        case let .double(value): return value
+        case let .decimal(value): return Double(value)
+        case let .integer(value): return Double(value)
+        case let .unsignedInteger(value): return Double(value)
+        case let .string(value): return Double(value)
+        default: return nil
+        }
+    }
+
+    public func bytes(_ column: String) -> Data? {
+        guard case let .bytes(value) = self[column] else { return nil }
+        return value
     }
 }
 
@@ -190,14 +335,14 @@ public final class DatabaseClient {
         var columns: [DatabaseColumn] = []
         for _ in 0..<columnCount {
             let colPacket = try proto.readPacket()
-            columns.append(DatabaseColumn(name: MySQLProtocol.parseColumnPacket(colPacket)))
+            columns.append(MySQLProtocol.parseColumnPacket(colPacket))
         }
         _ = try proto.readPacket() // EOF
         var rows: [DatabaseRow] = []
         while true {
             let pkt = try proto.readPacket()
             if pkt.count > 0, pkt[0] == 0xFE, pkt.count < 9 { break } // EOF
-            let row = MySQLProtocol.parseRowPacket(pkt, columnCount: columns.count)
+            let row = MySQLProtocol.parseRowPacket(pkt, columns: columns)
             var dict: [String: DatabaseValue] = [:]
             for (i, col) in columns.enumerated() {
                 dict[col.name] = row[i]

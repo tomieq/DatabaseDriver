@@ -266,38 +266,146 @@ final class MySQLProtocol {
     }
 
     static func readLengthEncodedString(_ data: [UInt8], offset: inout Int) -> String? {
-        if offset >= data.count { return "" }
+        guard let bytes = self.readLengthEncodedBytes(data, offset: &offset) else { return nil }
+        return String(data: bytes, encoding: .utf8) ?? ""
+    }
+
+    static func readLengthEncodedBytes(_ data: [UInt8], offset: inout Int) -> Data? {
+        if offset >= data.count { return Data() }
         if data[offset] == 0xFB {
             offset += 1
             return nil
         }
         let (length, _) = self.readLengthEncodedInt(data, offset: &offset)
-        guard offset + length <= data.count else { return "" }
-        let value = String(bytes: data[offset..<(offset + length)], encoding: .utf8) ?? ""
+        guard offset + length <= data.count else { return Data() }
+        let value = Data(data[offset..<(offset + length)])
         offset += length
         return value
     }
 
-    static func parseColumnPacket(_ pkt: [UInt8]) -> String {
+    static func parseColumnPacket(_ pkt: [UInt8]) -> DatabaseColumn {
         var idx = 0
-        // read catalog, db, table, org_table, name
         let _ = self.readLengthEncodedString(pkt, offset: &idx)
         let _ = self.readLengthEncodedString(pkt, offset: &idx)
         let _ = self.readLengthEncodedString(pkt, offset: &idx)
         let _ = self.readLengthEncodedString(pkt, offset: &idx)
-        return self.readLengthEncodedString(pkt, offset: &idx) ?? ""
+        let name = self.readLengthEncodedString(pkt, offset: &idx) ?? ""
+        let _ = self.readLengthEncodedString(pkt, offset: &idx)
+        let _ = self.readLengthEncodedInt(pkt, offset: &idx)
+
+        var characterSet: UInt16 = 0
+        var columnLength: UInt32 = 0
+        var typeCode: UInt8 = 0xFE
+        var flags: UInt16 = 0
+        if idx + 10 <= pkt.count {
+            characterSet = UInt16(pkt[idx]) | (UInt16(pkt[idx + 1]) << 8)
+            idx += 2
+            columnLength = UInt32(pkt[idx]) | (UInt32(pkt[idx + 1]) << 8) | (UInt32(pkt[idx + 2]) << 16) | (UInt32(pkt[idx + 3]) << 24)
+            idx += 4
+            typeCode = pkt[idx]
+            idx += 1
+            flags = UInt16(pkt[idx]) | (UInt16(pkt[idx + 1]) << 8)
+        }
+
+        return DatabaseColumn(
+            name: name,
+            type: self.columnType(for: typeCode),
+            isUnsigned: flags & 0x0020 != 0,
+            isBinary: characterSet == 63,
+            length: columnLength
+        )
     }
 
-    static func parseRowPacket(_ pkt: [UInt8], columnCount: Int) -> [DatabaseValue] {
+    static func parseRowPacket(_ pkt: [UInt8], columns: [DatabaseColumn]) -> [DatabaseValue] {
         var idx = 0
         var row: [DatabaseValue] = []
-        for _ in 0..<columnCount {
-            guard let value = readLengthEncodedString(pkt, offset: &idx) else {
+        for column in columns {
+            guard let bytes = readLengthEncodedBytes(pkt, offset: &idx) else {
                 row.append(.null)
                 continue
             }
-            row.append(.string(value))
+            row.append(self.parseValue(bytes, column: column))
         }
         return row
+    }
+
+    private static func columnType(for code: UInt8) -> DatabaseColumnType {
+        switch code {
+        case 0x00, 0xF6: return .decimal
+        case 0x01: return .tinyInteger
+        case 0x02: return .smallInteger
+        case 0x03: return .integer
+        case 0x04: return .float
+        case 0x05: return .double
+        case 0x06: return .null
+        case 0x07: return .timestamp
+        case 0x08: return .bigInteger
+        case 0x09: return .mediumInteger
+        case 0x0A, 0x0E: return .date
+        case 0x0B: return .time
+        case 0x0C: return .dateTime
+        case 0x0D: return .year
+        case 0x0F: return .varchar
+        case 0x10: return .bit
+        case 0xF5: return .json
+        case 0xF7: return .enumValue
+        case 0xF8: return .set
+        case 0xF9, 0xFA, 0xFB, 0xFC: return .blob
+        case 0xFD: return .varString
+        case 0xFE: return .string
+        case 0xFF: return .geometry
+        default: return .unknown(code)
+        }
+    }
+
+    private static func parseValue(_ bytes: Data, column: DatabaseColumn) -> DatabaseValue {
+        let text = String(data: bytes, encoding: .utf8) ?? ""
+        switch column.type {
+        case .tinyInteger where column.length == 1:
+            return .bool(text != "0")
+        case .tinyInteger, .smallInteger, .integer, .mediumInteger, .bigInteger, .year:
+            if column.isUnsigned { return .unsignedInteger(UInt64(text) ?? 0) }
+            return .integer(Int64(text) ?? 0)
+        case .float, .double:
+            return .double(Double(text) ?? 0)
+        case .decimal:
+            return .decimal(text)
+        case .date:
+            return self.parseDate(text).map(DatabaseValue.date) ?? .string(text)
+        case .time:
+            return self.parseTime(text).map(DatabaseValue.time) ?? .string(text)
+        case .timestamp, .dateTime:
+            return self.parseDateTime(text).map(DatabaseValue.dateTime) ?? .string(text)
+        case .bit:
+            if bytes.count == 1 { return .bool(bytes[bytes.startIndex] != 0) }
+            return .bytes(bytes)
+        case .blob where column.isBinary, .geometry where column.isBinary:
+            return .bytes(bytes)
+        default:
+            return .string(text)
+        }
+    }
+
+    private static func parseDate(_ text: String) -> DatabaseDate? {
+        let parts = text.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
+        return DatabaseDate(year: year, month: month, day: day)
+    }
+
+    private static func parseTime(_ text: String) -> DatabaseTime? {
+        var value = text
+        let isNegative = value.first == "-"
+        if isNegative { value.removeFirst() }
+        let secondParts = value.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        let clockParts = secondParts[0].split(separator: ":", omittingEmptySubsequences: false)
+        guard clockParts.count == 3, let hours = Int(clockParts[0]), let minutes = Int(clockParts[1]), let seconds = Int(clockParts[2]) else { return nil }
+        let microseconds = secondParts.count == 2 ? Int(secondParts[1].padding(toLength: 6, withPad: "0", startingAt: 0).prefix(6)) ?? 0 : 0
+        return DatabaseTime(isNegative: isNegative, hours: hours, minutes: minutes, seconds: seconds, microseconds: microseconds)
+    }
+
+    private static func parseDateTime(_ text: String) -> DatabaseDateTime? {
+        let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let date = self.parseDate(String(parts[0])), let time = self.parseTime(String(parts[1])) else { return nil }
+        return DatabaseDateTime(date: date, time: time)
     }
 }
