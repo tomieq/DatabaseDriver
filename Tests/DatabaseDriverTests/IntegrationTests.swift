@@ -1,6 +1,30 @@
 import XCTest
 @testable import DatabaseDriver
 
+private final class ConcurrentQueryResults: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Int64] = []
+    private var errors: [Error] = []
+
+    func append(value: Int64) {
+        self.lock.lock()
+        self.values.append(value)
+        self.lock.unlock()
+    }
+
+    func append(error: Error) {
+        self.lock.lock()
+        self.errors.append(error)
+        self.lock.unlock()
+    }
+
+    func snapshot() -> (values: [Int64], errors: [Error]) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return (self.values, self.errors)
+    }
+}
+
 final class IntegrationTests: XCTestCase {
     func shell(_ args: [String]) throws -> (Int32, String) {
         let task = Process()
@@ -110,6 +134,24 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(row["created_at"], .dateTime(DatabaseDateTime(date: DatabaseDate(year: 2026, month: 5, day: 18), time: DatabaseTime(hours: 14, minutes: 30, seconds: 15, microseconds: 123456))))
         XCTAssertEqual(row["elapsed"], .time(DatabaseTime(hours: 12, minutes: 34, seconds: 56, microseconds: 1)))
         XCTAssertEqual(row.bytes("payload"), Data([0x68, 0x69]))
+
+        let concurrentResults = ConcurrentQueryResults()
+        DispatchQueue.concurrentPerform(iterations: 12) { index in
+            do {
+                let concurrentResult = try client.execute("SELECT \(index) AS value")
+                let value = concurrentResult.rows.first?.integer("value")
+                if let value {
+                    concurrentResults.append(value: value)
+                } else {
+                    concurrentResults.append(error: DatabaseError.protocolError("missing concurrent value"))
+                }
+            } catch {
+                concurrentResults.append(error: error)
+            }
+        }
+        let snapshot = concurrentResults.snapshot()
+        XCTAssertTrue(snapshot.errors.isEmpty, "Concurrent queries failed: \(snapshot.errors)")
+        XCTAssertEqual(snapshot.values.sorted(), Array(0..<12).map(Int64.init))
 
         client.disconnect()
     }

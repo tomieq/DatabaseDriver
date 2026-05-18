@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DatabaseConfig {
+public struct DatabaseConfig: Sendable {
     public var host: String
     public var port: Int
     public var user: String
@@ -16,7 +16,7 @@ public struct DatabaseConfig {
     }
 }
 
-public enum DatabaseError: Error {
+public enum DatabaseError: Error, Sendable {
     case connectionFailed(String)
     case protocolError(String)
     case serverError(code: Int, message: String)
@@ -226,30 +226,42 @@ public struct QueryResult: Equatable, Sendable {
     public var isResultSet: Bool { !self.columns.isEmpty }
 }
 
-public final class DatabaseClient {
+public final class DatabaseClient: @unchecked Sendable {
     let config: DatabaseConfig
     var socket: NetworkSocket?
     var sequence: UInt8 = 0
     var proto: MySQLProtocol?
+    private let lock = NSRecursiveLock()
 
     public init(config: DatabaseConfig) {
         self.config = config
     }
 
     public func connect() throws {
-        let s = try NetworkSocket()
-        try s.connect(host: self.config.host, port: self.config.port)
-        self.socket = s
-        let p = MySQLProtocol(socket: s)
-        p.resetSequence()
-        self.proto = p
-        try self.performHandshake()
+        try self.withLock {
+            let s = try NetworkSocket()
+            do {
+                try s.connect(host: self.config.host, port: self.config.port)
+                self.socket = s
+                let p = MySQLProtocol(socket: s)
+                p.resetSequence()
+                self.proto = p
+                try self.performHandshake()
+            } catch {
+                try? s.close()
+                self.socket = nil
+                self.proto = nil
+                throw error
+            }
+        }
     }
 
     public func disconnect() {
-        try? self.socket?.close()
-        self.socket = nil
-        self.proto = nil
+        self.withLock {
+            try? self.socket?.close()
+            self.socket = nil
+            self.proto = nil
+        }
     }
 
     deinit {
@@ -316,45 +328,53 @@ public final class DatabaseClient {
 
     @discardableResult
     public func execute(_ sql: String) throws -> QueryResult {
-        guard self.socket != nil else { throw DatabaseError.connectionFailed("no socket") }
-        guard let proto else { throw DatabaseError.connectionFailed("no protocol") }
-        try proto.sendQuery(sql: sql)
-        let first = try proto.readPacket()
-        if first.count == 0 { return QueryResult(columns: [], rows: [], affectedRows: 0, lastInsertID: 0) }
-        if first[0] == 0x00 {
-            let ok = MySQLProtocol.parseOKPacket(first)
-            return QueryResult(columns: [], rows: [], affectedRows: ok.affectedRows, lastInsertID: ok.lastInsertID)
-        }
-        if first[0] == 0xFF {
-            let (code, msg) = MySQLProtocol.parseErrorPacket(first)
-            throw DatabaseError.serverError(code: code, message: msg)
-        }
-        // Result set: first packet is column count (len-encoded-int)
-        var offset = 0
-        let (columnCount, _) = MySQLProtocol.readLengthEncodedInt(first, offset: &offset)
-        var columns: [DatabaseColumn] = []
-        for _ in 0..<columnCount {
-            let colPacket = try proto.readPacket()
-            columns.append(MySQLProtocol.parseColumnPacket(colPacket))
-        }
-        _ = try proto.readPacket() // EOF
-        var rows: [DatabaseRow] = []
-        while true {
-            let pkt = try proto.readPacket()
-            if pkt.count > 0, pkt[0] == 0xFE, pkt.count < 9 { break } // EOF
-            let row = MySQLProtocol.parseRowPacket(pkt, columns: columns)
-            var dict: [String: DatabaseValue] = [:]
-            for (i, col) in columns.enumerated() {
-                dict[col.name] = row[i]
+        try self.withLock {
+            guard self.socket != nil else { throw DatabaseError.connectionFailed("no socket") }
+            guard let proto else { throw DatabaseError.connectionFailed("no protocol") }
+            try proto.sendQuery(sql: sql)
+            let first = try proto.readPacket()
+            if first.count == 0 { return QueryResult(columns: [], rows: [], affectedRows: 0, lastInsertID: 0) }
+            if first[0] == 0x00 {
+                let ok = MySQLProtocol.parseOKPacket(first)
+                return QueryResult(columns: [], rows: [], affectedRows: ok.affectedRows, lastInsertID: ok.lastInsertID)
             }
-            rows.append(DatabaseRow(values: row, valuesByColumn: dict))
+            if first[0] == 0xFF {
+                let (code, msg) = MySQLProtocol.parseErrorPacket(first)
+                throw DatabaseError.serverError(code: code, message: msg)
+            }
+            // Result set: first packet is column count (len-encoded-int)
+            var offset = 0
+            let (columnCount, _) = MySQLProtocol.readLengthEncodedInt(first, offset: &offset)
+            var columns: [DatabaseColumn] = []
+            for _ in 0..<columnCount {
+                let colPacket = try proto.readPacket()
+                columns.append(MySQLProtocol.parseColumnPacket(colPacket))
+            }
+            _ = try proto.readPacket() // EOF
+            var rows: [DatabaseRow] = []
+            while true {
+                let pkt = try proto.readPacket()
+                if pkt.count > 0, pkt[0] == 0xFE, pkt.count < 9 { break } // EOF
+                let row = MySQLProtocol.parseRowPacket(pkt, columns: columns)
+                var dict: [String: DatabaseValue] = [:]
+                for (i, col) in columns.enumerated() {
+                    dict[col.name] = row[i]
+                }
+                rows.append(DatabaseRow(values: row, valuesByColumn: dict))
+            }
+            return QueryResult(columns: columns, rows: rows, affectedRows: 0, lastInsertID: 0)
         }
-        return QueryResult(columns: columns, rows: rows, affectedRows: 0, lastInsertID: 0)
     }
 
     public func query(_ sql: String) throws -> [[String: String]] {
         try self.execute(sql).rows.map { row in
             row.valuesByColumn.compactMapValues(\.stringValue)
         }
+    }
+
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return try body()
     }
 }
