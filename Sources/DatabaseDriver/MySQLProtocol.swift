@@ -1,11 +1,6 @@
 import Foundation
 import Crypto
 
-struct ServerHandshake {
-    let scramble: Data
-    let authPluginName: String
-}
-
 final class MySQLProtocol {
     let socket: NetworkSocket
     private var sequence: UInt8 = 0

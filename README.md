@@ -42,6 +42,57 @@ print(rows.first?["name"] ?? "")
 
 `execute(_:)` returns a `QueryResult` with columns, rows, affected row count, and last inserted id. `query(_:)` is a convenience wrapper for string-only result sets.
 
+## Server-side connection management
+
+`DatabaseClient` represents one MySQL connection. It is safe to share between threads because calls to `connect()`, `disconnect()`, and `execute(_:)` are serialized internally, but a single MySQL socket can still process only one command at a time. In a server application, use one shared `DatabasePool` per database configuration instead of one global `DatabaseClient`.
+
+```swift
+let pool = DatabasePool(
+	config: DatabaseConfig(
+		host: "127.0.0.1",
+		port: 3306,
+		user: "app",
+		password: "secret",
+		database: "app"
+	),
+	maxConnections: 10
+)
+
+let users = try pool.execute("SELECT id, name FROM users")
+
+try pool.withConnection { connection in
+	try connection.execute("START TRANSACTION")
+	do {
+		try connection.execute("UPDATE accounts SET balance = balance - 10 WHERE id = 1")
+		try connection.execute("UPDATE accounts SET balance = balance + 10 WHERE id = 2")
+		try connection.execute("COMMIT")
+	} catch {
+		try? connection.execute("ROLLBACK")
+		throw error
+	}
+}
+
+pool.close()
+```
+
+Recommended pattern:
+
+- Create the pool during application startup and keep it for the lifetime of the process.
+- Size `maxConnections` from expected concurrency and MySQL limits. Start small, often near the number of request workers, and keep it below the server's `max_connections` after reserving capacity for migrations, admin tools, and other services.
+- Use `pool.execute(_:)` or `pool.query(_:)` for one-shot statements.
+- Use `pool.withConnection { ... }` when multiple statements must run on the same connection, for example transactions, temporary tables, session variables, or `LAST_INSERT_ID()` workflows.
+- Always close the pool during graceful shutdown with `pool.close()`.
+
+Reconnect behavior:
+
+- New pool connections are opened lazily when demand appears.
+- Idle connections are reused.
+- SQL errors returned by MySQL, such as syntax errors or missing tables, do not discard the connection.
+- Transport/protocol failures discard the connection; the next checkout opens a fresh connection.
+- If you manage a raw `DatabaseClient`, call `reconnect()` after a network failure or after MySQL closes an idle connection.
+
+For high-throughput services, prefer many short `pool.execute` calls over sharing one `DatabaseClient` across all requests. Sharing one client is correct, but it serializes all queries and becomes a bottleneck.
+
 ## Type mapping
 
 Column metadata is exposed through `DatabaseColumn.type`, `isUnsigned`, `isBinary`, and `length`. Row values are mapped to `DatabaseValue` cases:

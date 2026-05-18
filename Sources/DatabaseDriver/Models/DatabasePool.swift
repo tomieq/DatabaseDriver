@@ -1,0 +1,124 @@
+//
+//  DatabasePool.swift
+//  DatabaseDriver
+//
+//  Created by: tomieq on 18/05/2026
+//
+import Foundation
+
+public final class DatabasePool: @unchecked Sendable {
+    public let config: DatabaseConfig
+    public let maxConnections: Int
+
+    private let condition = NSCondition()
+    private var idle: [DatabaseClient] = []
+    private var totalConnections = 0
+    private var isClosed = false
+
+    public init(config: DatabaseConfig, maxConnections: Int = 10) {
+        self.config = config
+        self.maxConnections = max(1, maxConnections)
+    }
+
+    deinit {
+        self.close()
+    }
+
+    @discardableResult
+    public func execute(_ sql: String) throws -> QueryResult {
+        try self.withConnection { client in
+            try client.execute(sql)
+        }
+    }
+
+    public func query(_ sql: String) throws -> [[String: String]] {
+        try self.withConnection { client in
+            try client.query(sql)
+        }
+    }
+
+    public func withConnection<T>(_ body: (DatabaseClient) throws -> T) throws -> T {
+        let client = try self.acquire()
+        do {
+            let result = try body(client)
+            self.release(client, reusable: client.isConnected)
+            return result
+        } catch {
+            let reusable = client.isConnected && self.canReuseAfterError(error)
+            self.release(client, reusable: reusable)
+            throw error
+        }
+    }
+
+    public func close() {
+        self.condition.lock()
+        self.isClosed = true
+        let clients = self.idle
+        self.idle.removeAll()
+        self.totalConnections -= clients.count
+        self.condition.broadcast()
+        self.condition.unlock()
+
+        for client in clients {
+            client.disconnect()
+        }
+    }
+
+    private func acquire() throws -> DatabaseClient {
+        while true {
+            self.condition.lock()
+            if self.isClosed {
+                self.condition.unlock()
+                throw DatabaseError.connectionFailed("pool is closed")
+            }
+            if let client = self.idle.popLast() {
+                self.condition.unlock()
+                return client
+            }
+            if self.totalConnections < self.maxConnections {
+                self.totalConnections += 1
+                self.condition.unlock()
+                let client = DatabaseClient(config: self.config)
+                do {
+                    try client.connect()
+                    return client
+                } catch {
+                    self.condition.lock()
+                    self.totalConnections -= 1
+                    self.condition.signal()
+                    self.condition.unlock()
+                    throw error
+                }
+            }
+            self.condition.wait()
+            self.condition.unlock()
+        }
+    }
+
+    private func release(_ client: DatabaseClient, reusable: Bool) {
+        if reusable {
+            self.condition.lock()
+            if self.isClosed {
+                self.totalConnections -= 1
+                self.condition.signal()
+                self.condition.unlock()
+                client.disconnect()
+            } else {
+                self.idle.append(client)
+                self.condition.signal()
+                self.condition.unlock()
+            }
+        } else {
+            client.disconnect()
+            self.condition.lock()
+            self.totalConnections -= 1
+            self.condition.signal()
+            self.condition.unlock()
+        }
+    }
+
+    private func canReuseAfterError(_ error: Error) -> Bool {
+        if case DatabaseError.serverError = error { return true }
+        return false
+    }
+}

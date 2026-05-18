@@ -153,6 +153,30 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(snapshot.errors.isEmpty, "Concurrent queries failed: \(snapshot.errors)")
         XCTAssertEqual(snapshot.values.sorted(), Array(0..<12).map(Int64.init))
 
+        let pool = DatabasePool(config: cfg, maxConnections: 3)
+        defer { pool.close() }
+        try pool.execute("USE testdb")
+        let pooledResults = ConcurrentQueryResults()
+        DispatchQueue.concurrentPerform(iterations: 12) { index in
+            do {
+                let pooledResult = try pool.execute("SELECT \(index) AS value")
+                if let value = pooledResult.rows.first?.integer("value") {
+                    pooledResults.append(value: value)
+                } else {
+                    pooledResults.append(error: DatabaseError.protocolError("missing pooled value"))
+                }
+            } catch {
+                pooledResults.append(error: error)
+            }
+        }
+        let pooledSnapshot = pooledResults.snapshot()
+        XCTAssertTrue(pooledSnapshot.errors.isEmpty, "Pooled queries failed: \(pooledSnapshot.errors)")
+        XCTAssertEqual(pooledSnapshot.values.sorted(), Array(0..<12).map(Int64.init))
+
+        XCTAssertThrowsError(try pool.execute("SELECT * FROM definitely_missing_table"))
+        let afterSQLError = try pool.execute("SELECT 42 AS value")
+        XCTAssertEqual(afterSQLError.rows.first?.integer("value"), 42)
+
         client.disconnect()
     }
 }
