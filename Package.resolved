@@ -1,0 +1,15 @@
+{
+  "originHash" : "5449644c3946d5e1fa28cff134342403568d1c3beadd9918d91808584ab087b9",
+  "pins" : [
+    {
+      "identity" : "swiftextensions",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tomieq/SwiftExtensions",
+      "state" : {
+        "revision" : "f3c8b038ff2d44ec600316cab07326a69b4c79cf",
+        "version" : "2.0.1"
+      }
+    }
+  ],
+  "version" : 3
+}
