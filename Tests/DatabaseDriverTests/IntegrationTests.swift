@@ -44,7 +44,7 @@ final class IntegrationTests: XCTestCase {
             let logs = try shell(["docker", "logs", containerId])
             if logs.0 == 0 {
                 let out = logs.1.lowercased()
-                if out.contains("ready for connections") || out.contains("ready for connection"), out.contains("port: 3306") {
+                if out.contains("ready for connections") || out.contains("ready for connection"), out.contains("port: 3306  mysql") {
                     ready = true
                     break
                 }

@@ -6,6 +6,18 @@ import Darwin
 #endif
 
 private enum SystemSocket {
+    static var streamSocketType: Int32 {
+        #if os(Linux)
+        Int32(SOCK_STREAM.rawValue)
+        #else
+        SOCK_STREAM
+        #endif
+    }
+
+    static var tcpProtocol: Int32 {
+        Int32(IPPROTO_TCP)
+    }
+
     static func connect(_ socket: Int32, _ address: UnsafePointer<sockaddr>, _ addressLength: socklen_t) -> Int32 {
         #if os(Linux)
         Glibc.connect(socket, address, addressLength)
@@ -108,7 +120,10 @@ final class NetworkSocket {
     }
 
     private func resolve(host: String, port: Int) throws -> UnsafeMutablePointer<addrinfo> {
-        var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM, ai_protocol: IPPROTO_TCP, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SystemSocket.streamSocketType
+        hints.ai_protocol = SystemSocket.tcpProtocol
         var infoPtr: UnsafeMutablePointer<addrinfo>?
         let portStr = String(port)
         let res = getaddrinfo(host, portStr, &hints, &infoPtr)
