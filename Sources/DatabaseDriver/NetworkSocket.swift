@@ -1,5 +1,27 @@
 import Foundation
+#if os(Linux)
+import Glibc
+#else
 import Darwin
+#endif
+
+private enum SystemSocket {
+    static func connect(_ socket: Int32, _ address: UnsafePointer<sockaddr>, _ addressLength: socklen_t) -> Int32 {
+        #if os(Linux)
+        Glibc.connect(socket, address, addressLength)
+        #else
+        Darwin.connect(socket, address, addressLength)
+        #endif
+    }
+
+    static func close(_ fd: Int32) -> Int32 {
+        #if os(Linux)
+        Glibc.close(fd)
+        #else
+        Darwin.close(fd)
+        #endif
+    }
+}
 
 final class NetworkSocket {
     private var fd: Int32 = -1
@@ -18,13 +40,13 @@ final class NetworkSocket {
                 ptr = ai.ai_next
                 continue
             }
-            let res = Darwin.connect(sockfd, ai.ai_addr, ai.ai_addrlen)
+            let res = SystemSocket.connect(sockfd, ai.ai_addr, ai.ai_addrlen)
             if res == 0 {
                 self.fd = sockfd
                 freeaddrinfo(addrInfo)
                 return
             }
-            Darwin.close(sockfd)
+            _ = SystemSocket.close(sockfd)
             ptr = ai.ai_next
         }
         freeaddrinfo(addrInfo)
@@ -82,7 +104,7 @@ final class NetworkSocket {
     }
 
     func close() throws {
-        if self.fd != -1 { Darwin.close(self.fd); self.fd = -1 }
+        if self.fd != -1 { _ = SystemSocket.close(self.fd); self.fd = -1 }
     }
 
     private func resolve(host: String, port: Int) throws -> UnsafeMutablePointer<addrinfo> {

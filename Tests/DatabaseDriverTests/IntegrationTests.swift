@@ -13,8 +13,10 @@ final class IntegrationTests: XCTestCase {
         try task.run()
         task.waitUntilExit()
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         let out = String(data: outData, encoding: .utf8) ?? ""
-        return (task.terminationStatus, out.trimmingCharacters(in: .whitespacesAndNewlines))
+        let err = String(data: errData, encoding: .utf8) ?? ""
+        return (task.terminationStatus, (out + err).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     func testMySQLDockerIntegration() throws {
@@ -31,7 +33,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(run.0, 0, "docker run failed: \(run.1)")
         let containerId = run.1
         defer {
-            try? shell(["docker", "rm", "-f", containerId])
+            _ = try? shell(["docker", "rm", "-f", containerId])
         }
 
         // Wait for MySQL to accept connections by scanning container logs and attempting TCP connect
@@ -42,20 +44,10 @@ final class IntegrationTests: XCTestCase {
             let logs = try shell(["docker", "logs", containerId])
             if logs.0 == 0 {
                 let out = logs.1.lowercased()
-                if out.contains("ready for connections") || out.contains("ready for connection") {
+                if out.contains("ready for connections") || out.contains("ready for connection"), out.contains("port: 3306") {
                     ready = true
                     break
                 }
-            }
-            // also try TCP connect to forwarded port
-            do {
-                let sock = try NetworkSocket()
-                try sock.connect(host: "127.0.0.1", port: 3307)
-                try? sock.close()
-                ready = true
-                break
-            } catch {
-                // not ready yet
             }
             Thread.sleep(forTimeInterval: 1)
         }
@@ -67,13 +59,23 @@ final class IntegrationTests: XCTestCase {
         try client.connect()
 
         // Run simple DB commands
-        try client.query("CREATE DATABASE IF NOT EXISTS testdb")
-        try client.query("USE testdb")
-        try client.query("CREATE TABLE IF NOT EXISTS t(id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64))")
-        try client.query("INSERT INTO t (name) VALUES ('alice')")
+        try client.execute("CREATE DATABASE IF NOT EXISTS testdb")
+        try client.execute("USE testdb")
+        try client.execute("DROP TABLE IF EXISTS t")
+        try client.execute("CREATE TABLE t(id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64), nickname VARCHAR(64) NULL)")
+        let insert = try client.execute("INSERT INTO t (name, nickname) VALUES ('alice', NULL)")
+        XCTAssertEqual(insert.affectedRows, 1)
+        XCTAssertGreaterThan(insert.lastInsertID, 0)
+
         let rows = try client.query("SELECT name FROM t WHERE name='alice'")
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?["name"], "alice")
+
+        let result = try client.execute("SELECT id, name, nickname FROM t WHERE id=\(insert.lastInsertID)")
+        XCTAssertTrue(result.isResultSet)
+        XCTAssertEqual(result.columns.map(\.name), ["id", "name", "nickname"])
+        XCTAssertEqual(result.rows.first?.string("name"), "alice")
+        XCTAssertEqual(result.rows.first?["nickname"], .null)
 
         client.disconnect()
     }

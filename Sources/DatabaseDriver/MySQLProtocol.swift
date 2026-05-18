@@ -1,5 +1,5 @@
 import Foundation
-import CommonCrypto
+import Crypto
 
 struct ServerHandshake {
     let scramble: Data
@@ -21,28 +21,46 @@ final class MySQLProtocol {
     }
 
     func readPacket() throws -> [UInt8] {
-        let header = try socket.readExactly(4)
-        let headerBytes = [UInt8](header)
-        let len = Int(headerBytes[0]) | (Int(headerBytes[1]) << 8) | (Int(headerBytes[2]) << 16)
-        let seq = headerBytes[3]
-        // Update shared sequence to server sequence + 1 so next write uses expected id
-        self.sequence = seq &+ 1
-        if self.debug {
-            let hexHeader = headerBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
-            print("[mysqlproto] readPacket header: len=\(len) seq=\(seq) -> nextSequence=\(self.sequence) headerHex=\(hexHeader)")
-        }
-        if len == 0 { return [] }
-        let payload = try socket.readExactly(len)
-        if self.debug {
-            print("[mysqlproto] readPacket payload(\(len)) firstByte=\(payload.first.map({ String(format: "0x%02X", $0) }) ?? "nil")")
-            let hex = [UInt8](payload).map { String(format: "%02X", $0) }.joined(separator: " ")
-            print("[mysqlproto] readPacket payload hex: \(hex)")
-            if let fb = payload.first, fb == 0xFF {
-                let msg = String(data: payload, encoding: .utf8) ?? "<non-utf8>"
-                print("[mysqlproto] server error payload: \(msg)")
+        // Read first header/payload, and if server used maximal length (0xFFFFFF)
+        // then read continuation packets and concatenate payloads.
+        var fullPayload = [UInt8]()
+        while true {
+            let header = try socket.readExactly(4)
+            let headerBytes = [UInt8](header)
+            let len = Int(headerBytes[0]) | (Int(headerBytes[1]) << 8) | (Int(headerBytes[2]) << 16)
+            let seq = headerBytes[3]
+            // Update shared sequence to server sequence + 1 so next write uses expected id
+            self.sequence = seq &+ 1
+            if self.debug {
+                let hexHeader = headerBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+                print("[mysqlproto] readPacket header: len=\(len) seq=\(seq) -> nextSequence=\(self.sequence) headerHex=\(hexHeader)")
             }
+            if len == 0 {
+                // empty payload packet
+                if fullPayload.isEmpty {
+                    return []
+                } else {
+                    break
+                }
+            }
+            let payload = try socket.readExactly(len)
+            if self.debug {
+                print("[mysqlproto] readPacket payload(\(len)) firstByte=\(payload.first.map({ String(format: "0x%02X", $0) }) ?? "nil")")
+                let hex = [UInt8](payload).map { String(format: "%02X", $0) }.joined(separator: " ")
+                print("[mysqlproto] readPacket payload hex: \(hex)")
+                if let fb = payload.first, fb == 0xFF {
+                    let msg = String(data: payload, encoding: .utf8) ?? "<non-utf8>"
+                    print("[mysqlproto] server error payload: \(msg)")
+                }
+            }
+            fullPayload.append(contentsOf: [UInt8](payload))
+            // if this packet used the maximum payload length, server may send a continuation packet
+            if len < 0xFFFFFF {
+                break
+            }
+            // otherwise continue reading next header/payload
         }
-        return [UInt8](payload)
+        return fullPayload
     }
 
     func writePacket(_ payload: [UInt8]) throws {
@@ -72,7 +90,7 @@ final class MySQLProtocol {
         // server version (null-terminated)
         let verStart = idx
         while idx < pkt.count && pkt[idx] != 0 { idx += 1 }
-        let ver = String(bytes: pkt[verStart..<idx], encoding: .utf8) ?? ""
+        _ = String(bytes: pkt[verStart..<idx], encoding: .utf8) ?? ""
         idx += 1
         // connection id
         idx += 4
@@ -144,13 +162,7 @@ final class MySQLProtocol {
 
     static func authResponseCachingSHA2(password: String, scramble: Data) -> Data {
         if password.isEmpty { return Data() }
-        func sha256(_ data: Data) -> Data {
-            var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-            data.withUnsafeBytes { ptr in
-                _ = CC_SHA256(ptr.baseAddress, CC_LONG(data.count), &digest)
-            }
-            return Data(digest)
-        }
+        func sha256(_ data: Data) -> Data { Data(SHA256.hash(data: data)) }
         let pData = Data(password.utf8)
         let hash1 = sha256(pData)
         let hash2 = sha256(hash1)
@@ -168,9 +180,9 @@ final class MySQLProtocol {
     func sendAuth(username: String, authResponse: Data, database: String?, pluginName: String) throws {
         var payload = [UInt8]()
         // include CLIENT_PLUGIN_AUTH and common flags so server accepts plugin-based auth
-        // CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH
-        // Note: omit CLIENT_CONNECT_WITH_DB to avoid server interpreting trailing plugin name as database
-        let capability: UInt32 = 0x0008A207
+        // CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_CONNECT_WITH_DB? | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH
+        var capability: UInt32 = 0x0008A207
+        if database != nil { capability |= 0x00000008 }
         payload.append(UInt8(capability & 0xFF))
         payload.append(UInt8((capability >> 8) & 0xFF))
         payload.append(UInt8((capability >> 16) & 0xFF))
@@ -203,6 +215,8 @@ final class MySQLProtocol {
     }
 
     func sendQuery(sql: String) throws {
+        // each COM_QUERY should start with client sequence 0
+        self.resetSequence()
         var payload = [UInt8]()
         payload.append(0x03) // COM_QUERY
         payload.append(contentsOf: Array(sql.utf8))
@@ -244,55 +258,45 @@ final class MySQLProtocol {
         return (0, 0)
     }
 
-    static func parseColumnPacket(_ pkt: [UInt8]) -> String {
-        // column packet contains multiple length-encoded strings; name is 5th or 7th depending; to be simple, parse all sequential strings and take the 4th or 5th
-        var idx = 0
-        func readLenString() -> String {
-            if idx >= pkt.count { return "" }
-            let first = pkt[idx]
-            if first == 0xFB { idx += 1; return "" }
-            var off = idx
-            let (len, used) = self.readLengthEncodedInt(pkt, offset: &off)
-            if used == 1 && pkt[idx] < 0xFB {
-                // single byte length
-                let s = String(bytes: pkt[(idx + 1)..<(idx + 1 + len)], encoding: .utf8) ?? ""
-                idx = idx + 1 + len
-                return s
-            }
-            // fallback: read until null
-            var start = idx
-            while idx < pkt.count && pkt[idx] != 0 { idx += 1 }
-            let s = String(bytes: pkt[start..<idx], encoding: .utf8) ?? ""
-            idx += 1
-            return s
-        }
-        // read catalog, db, table, org_table, name
-        let _ = readLenString()
-        let _ = readLenString()
-        let _ = readLenString()
-        let _ = readLenString()
-        let name = readLenString()
-        return name
+    static func parseOKPacket(_ pkt: [UInt8]) -> (affectedRows: Int, lastInsertID: Int) {
+        var offset = 1
+        let (affectedRows, _) = self.readLengthEncodedInt(pkt, offset: &offset)
+        let (lastInsertID, _) = self.readLengthEncodedInt(pkt, offset: &offset)
+        return (affectedRows, lastInsertID)
     }
 
-    static func parseRowPacket(_ pkt: [UInt8], columnCount: Int) -> [String] {
+    static func readLengthEncodedString(_ data: [UInt8], offset: inout Int) -> String? {
+        if offset >= data.count { return "" }
+        if data[offset] == 0xFB {
+            offset += 1
+            return nil
+        }
+        let (length, _) = self.readLengthEncodedInt(data, offset: &offset)
+        guard offset + length <= data.count else { return "" }
+        let value = String(bytes: data[offset..<(offset + length)], encoding: .utf8) ?? ""
+        offset += length
+        return value
+    }
+
+    static func parseColumnPacket(_ pkt: [UInt8]) -> String {
         var idx = 0
-        var row: [String] = []
+        // read catalog, db, table, org_table, name
+        let _ = self.readLengthEncodedString(pkt, offset: &idx)
+        let _ = self.readLengthEncodedString(pkt, offset: &idx)
+        let _ = self.readLengthEncodedString(pkt, offset: &idx)
+        let _ = self.readLengthEncodedString(pkt, offset: &idx)
+        return self.readLengthEncodedString(pkt, offset: &idx) ?? ""
+    }
+
+    static func parseRowPacket(_ pkt: [UInt8], columnCount: Int) -> [DatabaseValue] {
+        var idx = 0
+        var row: [DatabaseValue] = []
         for _ in 0..<columnCount {
-            if idx >= pkt.count { row.append(""); continue }
-            let b = pkt[idx]
-            if b == 0xFB { idx += 1; row.append(""); continue }
-            var off = idx
-            let (len, _) = self.readLengthEncodedInt(pkt, offset: &off)
-            // if single-byte length
-            if pkt[idx] < 0xFB {
-                let s = String(bytes: pkt[(idx + 1)..<(idx + 1 + len)], encoding: .utf8) ?? ""
-                row.append(s)
-                idx = idx + 1 + len
+            guard let value = readLengthEncodedString(pkt, offset: &idx) else {
+                row.append(.null)
                 continue
             }
-            // fallback
-            row.append("")
+            row.append(.string(value))
         }
         return row
     }
