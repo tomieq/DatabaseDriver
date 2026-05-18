@@ -1,4 +1,5 @@
 import Foundation
+import CommonCrypto
 
 struct ServerHandshake {
     let scramble: Data
@@ -8,6 +9,7 @@ struct ServerHandshake {
 final class MySQLProtocol {
     let socket: NetworkSocket
     private var sequence: UInt8 = 0
+    private let debug: Bool
 
     func resetSequence() {
         self.sequence = 0
@@ -15,6 +17,7 @@ final class MySQLProtocol {
 
     init(socket: NetworkSocket) {
         self.socket = socket
+        self.debug = ProcessInfo.processInfo.environment["MYSQLPROTO_DEBUG"] == "1"
     }
 
     func readPacket() throws -> [UInt8] {
@@ -22,9 +25,23 @@ final class MySQLProtocol {
         let headerBytes = [UInt8](header)
         let len = Int(headerBytes[0]) | (Int(headerBytes[1]) << 8) | (Int(headerBytes[2]) << 16)
         let seq = headerBytes[3]
-        _ = seq // sequence from server
+        // Update shared sequence to server sequence + 1 so next write uses expected id
+        self.sequence = seq &+ 1
+        if self.debug {
+            let hexHeader = headerBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("[mysqlproto] readPacket header: len=\(len) seq=\(seq) -> nextSequence=\(self.sequence) headerHex=\(hexHeader)")
+        }
         if len == 0 { return [] }
         let payload = try socket.readExactly(len)
+        if self.debug {
+            print("[mysqlproto] readPacket payload(\(len)) firstByte=\(payload.first.map({ String(format: "0x%02X", $0) }) ?? "nil")")
+            let hex = [UInt8](payload).map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("[mysqlproto] readPacket payload hex: \(hex)")
+            if let fb = payload.first, fb == 0xFF {
+                let msg = String(data: payload, encoding: .utf8) ?? "<non-utf8>"
+                print("[mysqlproto] server error payload: \(msg)")
+            }
+        }
         return [UInt8](payload)
     }
 
@@ -35,6 +52,12 @@ final class MySQLProtocol {
         header[1] = UInt8((len >> 8) & 0xFF)
         header[2] = UInt8((len >> 16) & 0xFF)
         header[3] = self.sequence
+        if self.debug {
+            let hexHeader = header.map { String(format: "%02X", $0) }.joined(separator: " ")
+            let hexPayload = payload.map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("[mysqlproto] writePacket header: len=\(len) seq=\(self.sequence) headerHex=\(hexHeader)")
+            print("[mysqlproto] writePacket payload hex: \(hexPayload)")
+        }
         self.sequence &+= 1
         var data = Data(header)
         data.append(contentsOf: payload)
@@ -103,7 +126,7 @@ final class MySQLProtocol {
         return ServerHandshake(scramble: scramble, authPluginName: pluginName)
     }
 
-    static func authResponse(password: String, scramble: Data) -> Data {
+    static func authResponseNative(password: String, scramble: Data) -> Data {
         if password.isEmpty { return Data() }
         let p = [UInt8](password.utf8)
         let sha1 = SHA1.hash(data: Data(p))
@@ -119,9 +142,35 @@ final class MySQLProtocol {
         return out
     }
 
+    static func authResponseCachingSHA2(password: String, scramble: Data) -> Data {
+        if password.isEmpty { return Data() }
+        func sha256(_ data: Data) -> Data {
+            var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+            data.withUnsafeBytes { ptr in
+                _ = CC_SHA256(ptr.baseAddress, CC_LONG(data.count), &digest)
+            }
+            return Data(digest)
+        }
+        let pData = Data(password.utf8)
+        let hash1 = sha256(pData)
+        let hash2 = sha256(hash1)
+        var concat = Data()
+        concat.append(scramble)
+        concat.append(hash2)
+        let toXor = sha256(concat)
+        var out = Data(count: hash1.count)
+        for i in 0..<hash1.count {
+            out[i] = hash1[i] ^ toXor[i]
+        }
+        return out
+    }
+
     func sendAuth(username: String, authResponse: Data, database: String?, pluginName: String) throws {
         var payload = [UInt8]()
-        let capability: UInt32 = 0x0000A685 // CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_LONG_FLAG | CLIENT_PLUGIN_AUTH | CLIENT_CONNECT_WITH_DB
+        // include CLIENT_PLUGIN_AUTH and common flags so server accepts plugin-based auth
+        // CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH
+        // Note: omit CLIENT_CONNECT_WITH_DB to avoid server interpreting trailing plugin name as database
+        let capability: UInt32 = 0x0008A207
         payload.append(UInt8(capability & 0xFF))
         payload.append(UInt8((capability >> 8) & 0xFF))
         payload.append(UInt8((capability >> 16) & 0xFF))
@@ -145,6 +194,11 @@ final class MySQLProtocol {
         // plugin name
         payload.append(contentsOf: Array(pluginName.utf8))
         payload.append(0)
+        if self.debug {
+            let hex = payload.map { String(format: "%02X", $0) }.joined(separator: " ")
+            print("[mysqlproto] sendAuth payload len=\(payload.count) authRespLen=\(authResponse.count) plugin=\(pluginName)")
+            print("[mysqlproto] sendAuth hex: \(hex)")
+        }
         try self.writePacket(payload)
     }
 

@@ -34,10 +34,11 @@ final class IntegrationTests: XCTestCase {
             try? shell(["docker", "rm", "-f", containerId])
         }
 
-        // Wait for MySQL to accept connections by scanning container logs
-        let deadline = Date().addingTimeInterval(90)
+        // Wait for MySQL to accept connections by scanning container logs and attempting TCP connect
+        let deadline = Date().addingTimeInterval(120)
         var ready = false
         while Date() < deadline {
+            // check logs for readiness message
             let logs = try shell(["docker", "logs", containerId])
             if logs.0 == 0 {
                 let out = logs.1.lowercased()
@@ -45,6 +46,16 @@ final class IntegrationTests: XCTestCase {
                     ready = true
                     break
                 }
+            }
+            // also try TCP connect to forwarded port
+            do {
+                let sock = try NetworkSocket()
+                try sock.connect(host: "127.0.0.1", port: 3307)
+                try? sock.close()
+                ready = true
+                break
+            } catch {
+                // not ready yet
             }
             Thread.sleep(forTimeInterval: 1)
         }

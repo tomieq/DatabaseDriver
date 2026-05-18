@@ -1,7 +1,9 @@
 import Foundation
+import Darwin
 
 final class NetworkSocket {
     private var fd: Int32 = -1
+    private let debug: Bool = ProcessInfo.processInfo.environment["MYSQLPROTO_DEBUG"] == "1"
 
     init() throws {}
 
@@ -26,7 +28,10 @@ final class NetworkSocket {
             ptr = ai.ai_next
         }
         freeaddrinfo(addrInfo)
-        throw NSError(domain: "NetworkSocket", code: 1, userInfo: [NSLocalizedDescriptionKey: "connect failed"])
+        let err = errno
+        let msg = String(cString: strerror(err))
+        if self.debug { print("[netsock] connect failed fd=\(self.fd) errno=\(err) msg=\(msg)") }
+        throw NSError(domain: "NetworkSocket", code: Int(err == 0 ? 1 : err), userInfo: [NSLocalizedDescriptionKey: "connect failed: \(msg)"])
     }
 
     func readExactly(_ count: Int) throws -> Data {
@@ -36,7 +41,12 @@ final class NetworkSocket {
         while remaining > 0 {
             var chunk = [UInt8](repeating: 0, count: remaining)
             let n = recv(fd, &chunk, remaining, 0)
-            if n <= 0 { throw NSError(domain: "NetworkSocket", code: 2, userInfo: nil) }
+            if n <= 0 {
+                let err = errno
+                let msg = String(cString: strerror(err))
+                if self.debug { print("[netsock] recv fd=\(self.fd) returned \(n) errno=\(err) msg=\(msg)") }
+                throw NSError(domain: "NetworkSocket", code: Int(err == 0 ? 2 : err), userInfo: [NSLocalizedDescriptionKey: msg])
+            }
             buffer.append(chunk, count: n)
             remaining -= n
         }
@@ -46,7 +56,12 @@ final class NetworkSocket {
     func readSome(min: Int = 1) throws -> Data {
         var chunk = [UInt8](repeating: 0, count: 4096)
         let n = recv(fd, &chunk, chunk.count, 0)
-        if n <= 0 { throw NSError(domain: "NetworkSocket", code: 2, userInfo: nil) }
+        if n <= 0 {
+            let err = errno
+            let msg = String(cString: strerror(err))
+            if self.debug { print("[netsock] recvSome fd=\(self.fd) returned \(n) errno=\(err) msg=\(msg)") }
+            throw NSError(domain: "NetworkSocket", code: Int(err == 0 ? 2 : err), userInfo: [NSLocalizedDescriptionKey: msg])
+        }
         return Data(chunk[0..<n])
     }
 
@@ -55,7 +70,12 @@ final class NetworkSocket {
             var sent = 0
             while sent < data.count {
                 let n = send(fd, ptr.baseAddress!.advanced(by: sent), data.count - sent, 0)
-                if n <= 0 { throw NSError(domain: "NetworkSocket", code: 3, userInfo: nil) }
+                if n <= 0 {
+                    let err = errno
+                    let msg = String(cString: strerror(err))
+                    if self.debug { print("[netsock] send fd=\(self.fd) wrote \(n) errno=\(err) msg=\(msg)") }
+                    throw NSError(domain: "NetworkSocket", code: Int(err == 0 ? 3 : err), userInfo: [NSLocalizedDescriptionKey: msg])
+                }
                 sent += n
             }
         }

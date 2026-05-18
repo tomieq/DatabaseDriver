@@ -10,10 +10,12 @@ let package = Package(
         .library(
             name: "DatabaseDriver",
             targets: ["DatabaseDriver"]
-        )
+        ),
+        .executable(name: "mysql-handshake", targets: ["mysql-handshake"])
     ],
     dependencies: [
-        .package(url: "https://github.com/tomieq/SwiftExtensions", from: "2.0.0")
+        .package(url: "https://github.com/tomieq/SwiftExtensions", from: "2.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", .upToNextMajor(from: "3.12.3"))
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -21,11 +23,16 @@ let package = Package(
         .target(
             name: "DatabaseDriver",
             dependencies: [
-                .product(name: "SwiftExtensions", package: "SwiftExtensions")
+                .product(name: "SwiftExtensions", package: "SwiftExtensions"),
+                .product(name: "Crypto", package: "swift-crypto")
             ]
         ),
         .testTarget(
             name: "DatabaseDriverTests",
+            dependencies: ["DatabaseDriver"]
+        ),
+        .executableTarget(
+            name: "mysql-handshake",
             dependencies: ["DatabaseDriver"]
         )
     ]
