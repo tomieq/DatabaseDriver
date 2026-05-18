@@ -9,6 +9,10 @@ final class MySQLProtocol {
     let socket: NetworkSocket
     private var sequence: UInt8 = 0
 
+    func resetSequence() {
+        self.sequence = 0
+    }
+
     init(socket: NetworkSocket) {
         self.socket = socket
     }

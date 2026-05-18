@@ -50,8 +50,10 @@ public final class DatabaseClient {
     func performHandshake() throws {
         guard let socket else { throw DatabaseError.connectionFailed("no socket") }
         let proto = MySQLProtocol(socket: socket)
+        proto.resetSequence()
         let serverHandshake = try proto.readGreeting()
         let authResp = MySQLProtocol.authResponse(password: self.config.password, scramble: serverHandshake.scramble)
+        proto.resetSequence()
         try proto.sendAuth(username: self.config.user, authResponse: authResp, database: self.config.database, pluginName: serverHandshake.authPluginName)
         let resp = try proto.readPacket()
         if resp.count > 0 {
@@ -70,7 +72,7 @@ public final class DatabaseClient {
     public func query(_ sql: String) throws -> [[String: String]] {
         guard let socket else { throw DatabaseError.connectionFailed("no socket") }
         let proto = MySQLProtocol(socket: socket)
-        self.sequence = 0
+        proto.resetSequence()
         try proto.sendQuery(sql: sql)
         let first = try proto.readPacket()
         if first.count == 0 { return [] }
