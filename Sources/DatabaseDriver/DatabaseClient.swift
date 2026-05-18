@@ -42,9 +42,21 @@ public final class DatabaseClient: @unchecked Sendable {
         }
     }
 
+    public func connect() async throws {
+        try await runBlocking {
+            try self.connect()
+        }
+    }
+
     public func reconnect() throws {
         self.disconnect()
         try self.connect()
+    }
+
+    public func reconnect() async throws {
+        try await runBlocking {
+            try self.reconnect()
+        }
     }
 
     public func disconnect() {
@@ -52,6 +64,15 @@ public final class DatabaseClient: @unchecked Sendable {
             try? self.socket?.close()
             self.socket = nil
             self.proto = nil
+        }
+    }
+
+    public func disconnect() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                self.disconnect()
+                continuation.resume()
+            }
         }
     }
 
@@ -157,9 +178,22 @@ public final class DatabaseClient: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func execute(_ sql: String) async throws -> QueryResult {
+        try await runBlocking {
+            try self.execute(sql)
+        }
+    }
+
     public func query(_ sql: String) throws -> [[String: String]] {
         try self.execute(sql).rows.map { row in
             row.valuesByColumn.compactMapValues(\.stringValue)
+        }
+    }
+
+    public func query(_ sql: String) async throws -> [[String: String]] {
+        try await runBlocking {
+            try self.query(sql)
         }
     }
 

@@ -42,6 +42,34 @@ print(rows.first?["name"] ?? "")
 
 `execute(_:)` returns a `QueryResult` with columns, rows, affected row count, and last inserted id. `query(_:)` is a convenience wrapper for string-only result sets.
 
+## Async API
+
+The library exposes both synchronous and async variants. In async server code, prefer the async pool methods:
+
+```swift
+let pool = DatabasePool(
+	config: DatabaseConfig(user: "app", password: "secret", database: "app"),
+	maxConnections: 10
+)
+
+let result = try await pool.execute("SELECT id, name FROM users")
+
+try await pool.withConnection { connection in
+	try await connection.execute("START TRANSACTION")
+	do {
+		try await connection.execute("INSERT INTO audit_log(message) VALUES ('started')")
+		try await connection.execute("COMMIT")
+	} catch {
+		try? await connection.execute("ROLLBACK")
+		throw error
+	}
+}
+
+await pool.close()
+```
+
+The current async methods are compatibility wrappers around the blocking POSIX socket implementation. They keep Swift concurrency call sites clean and avoid blocking the caller's task directly, but they are not a fully non-blocking network stack yet. Use `DatabasePool` to bound concurrency and avoid funneling all requests through one serialized connection.
+
 ## Server-side connection management
 
 `DatabaseClient` represents one MySQL connection. It is safe to share between threads because calls to `connect()`, `disconnect()`, and `execute(_:)` are serialized internally, but a single MySQL socket can still process only one command at a time. In a server application, use one shared `DatabasePool` per database configuration instead of one global `DatabaseClient`.

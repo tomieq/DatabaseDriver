@@ -31,9 +31,22 @@ public final class DatabasePool: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func execute(_ sql: String) async throws -> QueryResult {
+        try await runBlocking {
+            try self.execute(sql)
+        }
+    }
+
     public func query(_ sql: String) throws -> [[String: String]] {
         try self.withConnection { client in
             try client.query(sql)
+        }
+    }
+
+    public func query(_ sql: String) async throws -> [[String: String]] {
+        try await runBlocking {
+            try self.query(sql)
         }
     }
 
@@ -41,6 +54,21 @@ public final class DatabasePool: @unchecked Sendable {
         let client = try self.acquire()
         do {
             let result = try body(client)
+            self.release(client, reusable: client.isConnected)
+            return result
+        } catch {
+            let reusable = client.isConnected && self.canReuseAfterError(error)
+            self.release(client, reusable: reusable)
+            throw error
+        }
+    }
+
+    public func withConnection<T: Sendable>(_ body: @escaping @Sendable (DatabaseClient) async throws -> T) async throws -> T {
+        let client = try await runBlocking {
+            try self.acquire()
+        }
+        do {
+            let result = try await body(client)
             self.release(client, reusable: client.isConnected)
             return result
         } catch {
@@ -61,6 +89,15 @@ public final class DatabasePool: @unchecked Sendable {
 
         for client in clients {
             client.disconnect()
+        }
+    }
+
+    public func close() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                self.close()
+                continuation.resume()
+            }
         }
     }
 
