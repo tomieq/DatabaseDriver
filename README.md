@@ -100,6 +100,39 @@ try client.run(users.drop(ifExists: true))
 
 Column types are inferred from `Expression` where possible: integers, unsigned integers, `Bool`, `Double`, `String`, `Data`, `DatabaseDate`, `DatabaseTime`, and `DatabaseDateTime` map to MySQL column types. Use `type:` for MySQL-specific choices such as `.varchar(255)`, `.decimal(precision:scale:)`, or `.custom("JSON")`. MySQL supports `IF NOT EXISTS` for table creation, but not for `CREATE INDEX` / `DROP INDEX`, so index builders generate MySQL-compatible statements without those clauses.
 
+You can also create a table from a flat Swift type. Swift reflection needs an instance to inspect stored properties, so the `Type.self` form requires a zero-argument initializer through `DatabaseSchemaRepresentable`:
+
+```swift
+struct User: DatabaseSchemaRepresentable {
+	let id: Int64
+	let name: String
+	let nickname: String?
+
+	init() {
+		self.id = 0
+		self.name = ""
+		self.nickname = nil
+	}
+}
+
+try client.run(Table("car_users").create(from: User.self, ifNotExists: true))
+// CREATE TABLE IF NOT EXISTS `car_users` (`id` BIGINT NOT NULL, `name` TEXT NOT NULL, `nickname` TEXT)
+```
+
+For models that cannot provide `init()`, pass a sample instance instead:
+
+```swift
+try client.run(Table("car_users").create(from: User(id: 0, name: "", nickname: nil)))
+```
+
+`create(from:)` is intentionally a convenience for flat schemas. Use the closure overload to add constraints or override ambiguous/custom columns:
+
+```swift
+try client.run(Table("car_users").create(from: User.self) { table in
+	table.column(named: "metadata", type: .custom("JSON"), notNull: false)
+})
+```
+
 ### Codable types
 
 Flat `Codable` models can be inserted, updated, and decoded from selected rows. Property names should match the selected column names.

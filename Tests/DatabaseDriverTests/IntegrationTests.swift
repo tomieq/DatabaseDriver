@@ -37,6 +37,20 @@ private struct CodablePersonPatch: Encodable {
     let nickname: String?
 }
 
+private struct SchemaPerson: DatabaseSchemaRepresentable {
+    let id: Int64
+    let name: String
+    let nickname: String?
+    let enabled: Bool
+
+    init() {
+        self.id = 0
+        self.name = ""
+        self.nickname = nil
+        self.enabled = false
+    }
+}
+
 final class IntegrationTests: XCTestCase {
     func shell(_ args: [String]) throws -> (Int32, String) {
         let task = Process()
@@ -217,6 +231,22 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(schemaRows.first?.bool("enabled"), true)
         try client.run(schemaTable.dropIndex(schemaEmail, named: "schema_api_users_email_idx"))
         try client.run(schemaTable.drop(ifExists: true))
+
+        let reflectedTable = Table("schema_reflected_users")
+        let reflectedID = reflectedTable.column("id", as: Int64.self)
+        let reflectedName = reflectedTable.column("name", as: String.self)
+        let reflectedNickname = reflectedTable.column("nickname", as: String?.self)
+        let reflectedEnabled = reflectedTable.column("enabled", as: Bool.self)
+        try client.run(reflectedTable.drop(ifExists: true))
+        try client.run(reflectedTable.create(from: SchemaPerson.self, ifNotExists: true))
+        let reflectedInsert = try client.run(reflectedTable.insert(reflectedID <- 1, reflectedName <- "reflected", reflectedNickname <- nil, reflectedEnabled <- true))
+        XCTAssertEqual(reflectedInsert.affectedRows, 1)
+        let reflectedRows = try client.prepare(reflectedTable.select(reflectedID, reflectedName, reflectedNickname, reflectedEnabled))
+        XCTAssertEqual(reflectedRows.first?.integer("id"), 1)
+        XCTAssertEqual(reflectedRows.first?.string("name"), "reflected")
+        XCTAssertEqual(reflectedRows.first?["nickname"], .null)
+        XCTAssertEqual(reflectedRows.first?.bool("enabled"), true)
+        try client.run(reflectedTable.drop(ifExists: true))
 
         let concurrentResults = ConcurrentQueryResults()
         DispatchQueue.concurrentPerform(iterations: 12) { index in

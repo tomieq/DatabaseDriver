@@ -66,6 +66,10 @@ public enum SQLForeignKeyAction: String, Sendable, Equatable {
     case noAction = "NO ACTION"
 }
 
+public protocol DatabaseSchemaRepresentable {
+    init()
+}
+
 public struct CreateTableQuery: SQLStatement {
     public let table: Table
     public let temporary: Bool
@@ -242,6 +246,27 @@ extension Table {
         return CreateTableQuery(table: self, temporary: temporary, ifNotExists: ifNotExists, definitions: definition.build())
     }
 
+    public func create<Value: DatabaseSchemaRepresentable>(from type: Value.Type, temporary: Bool = false, ifNotExists: Bool = false) -> CreateTableQuery {
+        self.create(from: Value(), temporary: temporary, ifNotExists: ifNotExists)
+    }
+
+    public func create<Value: DatabaseSchemaRepresentable>(from type: Value.Type, temporary: Bool = false, ifNotExists: Bool = false, _ define: (TableDefinition) -> Void) -> CreateTableQuery {
+        self.create(from: Value(), temporary: temporary, ifNotExists: ifNotExists, define)
+    }
+
+    public func create<Value>(from sample: Value, temporary: Bool = false, ifNotExists: Bool = false) -> CreateTableQuery {
+        let definition = TableDefinition(tableName: self.name)
+        definition.columns(from: sample)
+        return CreateTableQuery(table: self, temporary: temporary, ifNotExists: ifNotExists, definitions: definition.build())
+    }
+
+    public func create<Value>(from sample: Value, temporary: Bool = false, ifNotExists: Bool = false, _ define: (TableDefinition) -> Void) -> CreateTableQuery {
+        let definition = TableDefinition(tableName: self.name)
+        definition.columns(from: sample)
+        define(definition)
+        return CreateTableQuery(table: self, temporary: temporary, ifNotExists: ifNotExists, definitions: definition.build())
+    }
+
     public func drop(ifExists: Bool = false) -> DropTableQuery {
         DropTableQuery(table: self, ifExists: ifExists)
     }
@@ -270,6 +295,49 @@ extension Table {
                 .replacingOccurrences(of: " ", with: "_")
         }.joined(separator: "_and_")
         return "index_\(self.name)_on_\(columnNames)"
+    }
+}
+
+extension TableDefinition {
+    public func column(named name: String, type: SQLColumnType, primaryKey: SQLPrimaryKey = false, notNull: Bool = true, unique: Bool = false, defaultValue: DatabaseValue? = nil, check: SQLPredicate? = nil) {
+        self.addColumn(
+            name: name,
+            type: type,
+            primaryKey: primaryKey,
+            notNull: notNull || primaryKey != .none,
+            unique: unique,
+            defaultValue: defaultValue,
+            check: check,
+            references: nil,
+            delete: nil,
+            update: nil
+        )
+    }
+
+    public func columns<Value>(from sample: Value) {
+        self.addColumns(from: Mirror(reflecting: sample))
+    }
+
+    private func addColumns(from mirror: Mirror) {
+        if let superclassMirror = mirror.superclassMirror {
+            self.addColumns(from: superclassMirror)
+        }
+        for child in mirror.children {
+            guard let name = child.label else { continue }
+            let reflectedType = SQLColumnType.reflected(child.value)
+            self.addColumn(
+                name: name,
+                type: reflectedType.type,
+                primaryKey: .none,
+                notNull: !reflectedType.isOptional,
+                unique: false,
+                defaultValue: nil,
+                check: nil,
+                references: nil,
+                delete: nil,
+                update: nil
+            )
+        }
     }
 }
 
@@ -308,5 +376,51 @@ private extension SQLColumnType {
         case is DatabaseDateTime.Type: return .dateTime(fractionalSecondsPrecision: 6)
         default: return .text
         }
+    }
+
+    static func reflected(_ value: Any) -> (type: SQLColumnType, isOptional: Bool) {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            if let wrapped = mirror.children.first?.value {
+                return (self.reflectedNonOptional(wrapped), true)
+            }
+            return (self.reflectedNilOptional(value), true)
+        }
+        return (self.reflectedNonOptional(value), false)
+    }
+
+    private static func reflectedNonOptional(_ value: Any) -> SQLColumnType {
+        switch value {
+        case is Bool: return .bool
+        case is Int, is Int8, is Int16, is Int32: return .int
+        case is UInt, is UInt8, is UInt16, is UInt32: return .unsignedInt
+        case is Int64: return .bigInt
+        case is UInt64: return .unsignedBigInt
+        case is Float, is Double: return .double
+        case is Decimal: return .decimal(precision: 65, scale: 30)
+        case is String: return .text
+        case is Data: return .blob
+        case is DatabaseDate: return .date
+        case is DatabaseTime: return .time(fractionalSecondsPrecision: 6)
+        case is DatabaseDateTime: return .dateTime(fractionalSecondsPrecision: 6)
+        default: return .text
+        }
+    }
+
+    private static func reflectedNilOptional(_ value: Any) -> SQLColumnType {
+        let typeName = String(reflecting: Swift.type(of: value))
+        if typeName.contains("Bool") { return .bool }
+        if typeName.contains("Int64") { return .bigInt }
+        if typeName.contains("UInt64") { return .unsignedBigInt }
+        if typeName.contains("UInt") { return .unsignedInt }
+        if typeName.contains("Int") { return .int }
+        if typeName.contains("Float") || typeName.contains("Double") { return .double }
+        if typeName.contains("Decimal") { return .decimal(precision: 65, scale: 30) }
+        if typeName.contains("String") { return .text }
+        if typeName.contains("Data") { return .blob }
+        if typeName.contains("DatabaseDateTime") { return .dateTime(fractionalSecondsPrecision: 6) }
+        if typeName.contains("DatabaseDate") { return .date }
+        if typeName.contains("DatabaseTime") { return .time(fractionalSecondsPrecision: 6) }
+        return .text
     }
 }

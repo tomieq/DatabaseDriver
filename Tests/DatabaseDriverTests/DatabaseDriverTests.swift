@@ -15,6 +15,26 @@ private struct CodableUserPatch: Encodable {
     let nickname: String?
 }
 
+private struct SchemaUser: DatabaseSchemaRepresentable {
+    let id: Int64
+    let name: String
+    let nickname: String?
+    let enabled: Bool
+
+    init() {
+        self.id = 0
+        self.name = ""
+        self.nickname = nil
+        self.enabled = false
+    }
+}
+
+private struct SchemaUserSample {
+    let id: Int64
+    let name: String
+    let payload: Data?
+}
+
 final class DatabaseDriverTests: XCTestCase {
     func testSHA1Known() throws {
         let d = "abc".data(using: .utf8)!
@@ -89,6 +109,35 @@ final class DatabaseDriverTests: XCTestCase {
         XCTAssertEqual(users.createIndex(email, name, named: "users_lookup", unique: true).sql, "CREATE UNIQUE INDEX `users_lookup` ON `users` (`email`, `name`)")
         XCTAssertEqual(users.dropIndex(email).sql, "DROP INDEX `index_users_on_email` ON `users`")
         XCTAssertEqual(users.drop(ifExists: true).sql, "DROP TABLE IF EXISTS `users`")
+    }
+
+    func testSchemaAPIBuildsCreateTableFromTypeSQL() throws {
+        let users = Table("car_users")
+
+        XCTAssertEqual(
+            users.create(from: SchemaUser.self, ifNotExists: true).sql,
+            "CREATE TABLE IF NOT EXISTS `car_users` (`id` BIGINT NOT NULL, `name` TEXT NOT NULL, `nickname` TEXT, `enabled` BOOL NOT NULL)"
+        )
+    }
+
+    func testSchemaAPIBuildsCreateTableFromTypeWithOverridesSQL() throws {
+        let users = Table("car_users")
+
+        XCTAssertEqual(
+            users.create(from: SchemaUser.self, ifNotExists: true) { table in
+                table.column(named: "birthday", type: .date, notNull: false)
+            }.sql,
+            "CREATE TABLE IF NOT EXISTS `car_users` (`id` BIGINT NOT NULL, `name` TEXT NOT NULL, `nickname` TEXT, `enabled` BOOL NOT NULL, `birthday` DATE)"
+        )
+    }
+
+    func testSchemaAPIBuildsCreateTableFromSampleSQL() throws {
+        let users = Table("sample_users")
+
+        XCTAssertEqual(
+            users.create(from: SchemaUserSample(id: 0, name: "", payload: Data())).sql,
+            "CREATE TABLE `sample_users` (`id` BIGINT NOT NULL, `name` TEXT NOT NULL, `payload` BLOB)"
+        )
     }
 
     func testCodableAPIBuildsInsertAndUpdateSQL() throws {
