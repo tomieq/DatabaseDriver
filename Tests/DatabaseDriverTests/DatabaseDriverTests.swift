@@ -1,6 +1,20 @@
 import XCTest
 @testable import DatabaseDriver
 
+private struct CodableUser: Codable, Equatable {
+    let id: Int64?
+    let name: String
+    let nickname: String?
+    let enabled: Bool
+    let birthday: DatabaseDate
+    let payload: Data
+}
+
+private struct CodableUserPatch: Encodable {
+    let name: String
+    let nickname: String?
+}
+
 final class DatabaseDriverTests: XCTestCase {
     func testSHA1Known() throws {
         let d = "abc".data(using: .utf8)!
@@ -44,6 +58,57 @@ final class DatabaseDriverTests: XCTestCase {
 
         let delete = users.delete().filter(nickname == nil)
         XCTAssertEqual(delete.sql, "DELETE FROM `users` WHERE `users`.`nickname` IS NULL")
+    }
+
+    func testCodableAPIBuildsInsertAndUpdateSQL() throws {
+        let users = Table("users")
+        let id = users.column("id", as: Int64.self)
+
+        let user = CodableUser(
+            id: nil,
+            name: "O'Hara",
+            nickname: nil,
+            enabled: true,
+            birthday: DatabaseDate(year: 2026, month: 5, day: 19),
+            payload: Data([0x68, 0x69])
+        )
+
+        XCTAssertEqual(
+            try users.insert(user).sql,
+            "INSERT INTO `users` (`birthday`, `enabled`, `id`, `name`, `nickname`, `payload`) VALUES ('2026-05-19', TRUE, NULL, 'O''Hara', NULL, X'6869')"
+        )
+
+        let patch = CodableUserPatch(name: "alice", nickname: nil)
+        XCTAssertEqual(
+            try users.update(patch).filter(id == 42).sql,
+            "UPDATE `users` SET `users`.`name` = 'alice', `users`.`nickname` = NULL WHERE `users`.`id` = 42"
+        )
+    }
+
+    func testCodableAPIDecodesRows() throws {
+        let row = DatabaseRow(
+            values: [],
+            valuesByColumn: [
+                "id": .integer(42),
+                "name": .string("alice"),
+                "nickname": .null,
+                "enabled": .bool(true),
+                "birthday": .date(DatabaseDate(year: 2026, month: 5, day: 19)),
+                "payload": .bytes(Data([0x68, 0x69]))
+            ]
+        )
+
+        XCTAssertEqual(
+            try row.decode(CodableUser.self),
+            CodableUser(
+                id: 42,
+                name: "alice",
+                nickname: nil,
+                enabled: true,
+                birthday: DatabaseDate(year: 2026, month: 5, day: 19),
+                payload: Data([0x68, 0x69])
+            )
+        )
     }
 
     func testAsyncPoolReportsClosedPool() async throws {

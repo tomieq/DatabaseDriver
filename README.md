@@ -79,6 +79,45 @@ try client.run(users.delete().filter(nickname == nil))
 
 `Table`, `Expression`, comparison operators, `&&`, `||`, `!`, and the assignment operator `<-` are available on macOS and Linux. Values are escaped as SQL literals, identifiers are quoted with MySQL backticks, and `nil` optional values compile to `NULL` / `IS NULL` as appropriate.
 
+### Codable types
+
+Flat `Codable` models can be inserted, updated, and decoded from selected rows. Property names should match the selected column names.
+
+```swift
+struct User: Codable, Equatable {
+	let id: Int64?
+	let name: String
+	let nickname: String?
+	let enabled: Bool
+}
+
+struct UserPatch: Encodable {
+	let nickname: String?
+}
+
+let inserted = try client.run(try users.insert(User(
+	id: nil,
+	name: "alice",
+	nickname: nil,
+	enabled: true
+)))
+
+let decoded = try client.prepare(
+	users
+		.filter(id == Int64(inserted.lastInsertID))
+		.select(id, name, nickname, enabled),
+	as: User.self
+)
+
+try client.run(
+	try users
+		.update(UserPatch(nickname: "ally"))
+		.filter(id == Int64(inserted.lastInsertID))
+)
+```
+
+Codable support is intentionally table-shaped: top-level models are keyed containers, nested objects and arrays are not mapped into columns automatically. Optional `nil` stored properties are encoded as SQL `NULL` for inserts and updates.
+
 ## Async API
 
 The library exposes both synchronous and async variants. In async server code, prefer the async pool methods:

@@ -25,6 +25,18 @@ private final class ConcurrentQueryResults: @unchecked Sendable {
     }
 }
 
+private struct CodablePerson: Codable, Equatable {
+    let name: String
+    let nickname: String?
+    let enabled: Bool
+    let birthday: DatabaseDate
+    let payload: Data
+}
+
+private struct CodablePersonPatch: Encodable {
+    let nickname: String?
+}
+
 final class IntegrationTests: XCTestCase {
     func shell(_ args: [String]) throws -> (Int32, String) {
         let task = Process()
@@ -156,6 +168,33 @@ final class IntegrationTests: XCTestCase {
 
         let objectDelete = try client.run(table.delete().filter(objectNickname == missingNickname))
         XCTAssertGreaterThanOrEqual(objectDelete.affectedRows, 1)
+
+        let codableInsert = try client.run(try table.insert(CodablePerson(
+            name: "carol",
+            nickname: "caz",
+            enabled: true,
+            birthday: DatabaseDate(year: 2026, month: 5, day: 19),
+            payload: Data([0x63, 0x61])
+        )))
+        XCTAssertEqual(codableInsert.affectedRows, 1)
+
+        let codableRows = try client.prepare(
+            table
+                .filter(objectID == Int64(codableInsert.lastInsertID))
+                .select(objectName, objectNickname, table.column("enabled", as: Bool.self), table.column("birthday", as: DatabaseDate.self), table.column("payload", as: Data.self)),
+            as: CodablePerson.self
+        )
+        XCTAssertEqual(codableRows, [CodablePerson(name: "carol", nickname: "caz", enabled: true, birthday: DatabaseDate(year: 2026, month: 5, day: 19), payload: Data([0x63, 0x61]))])
+
+        let codableUpdate = try client.run(try table.update(CodablePersonPatch(nickname: nil)).filter(objectID == Int64(codableInsert.lastInsertID)))
+        XCTAssertEqual(codableUpdate.affectedRows, 1)
+        let decodedAfterUpdate = try client.prepare(
+            table
+                .filter(objectID == Int64(codableInsert.lastInsertID))
+                .select(objectName, objectNickname, table.column("enabled", as: Bool.self), table.column("birthday", as: DatabaseDate.self), table.column("payload", as: Data.self)),
+            as: CodablePerson.self
+        )
+        XCTAssertEqual(decodedAfterUpdate.first?.nickname, nil)
 
         let concurrentResults = ConcurrentQueryResults()
         DispatchQueue.concurrentPerform(iterations: 12) { index in
