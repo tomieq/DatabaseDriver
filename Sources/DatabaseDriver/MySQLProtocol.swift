@@ -1,4 +1,5 @@
 import Foundation
+import SwiftExtensions
 import Crypto
 
 final class MySQLProtocol {
@@ -21,7 +22,7 @@ final class MySQLProtocol {
         var fullPayload = [UInt8]()
         while true {
             let header = try socket.readExactly(4)
-            let headerBytes = [UInt8](header)
+            let headerBytes = header.array
             let len = Int(headerBytes[0]) | (Int(headerBytes[1]) << 8) | (Int(headerBytes[2]) << 16)
             let seq = headerBytes[3]
             // Update shared sequence to server sequence + 1 so next write uses expected id
@@ -48,7 +49,7 @@ final class MySQLProtocol {
                     print("[mysqlproto] server error payload: \(msg)")
                 }
             }
-            fullPayload.append(contentsOf: [UInt8](payload))
+            fullPayload.append(contentsOf: payload.array)
             // if this packet used the maximum payload length, server may send a continuation packet
             if len < 0xFFFFFF {
                 break
@@ -60,11 +61,10 @@ final class MySQLProtocol {
 
     func writePacket(_ payload: [UInt8]) throws {
         let len = payload.count
-        var header = [UInt8](repeating: 0, count: 4)
-        header[0] = UInt8(len & 0xFF)
-        header[1] = UInt8((len >> 8) & 0xFF)
-        header[2] = UInt8((len >> 16) & 0xFF)
-        header[3] = self.sequence
+        let header = len.uInt24
+            .data
+            .swappedBytes
+            .appending(self.sequence)
         if self.debug {
             let hexHeader = header.map { String(format: "%02X", $0) }.joined(separator: " ")
             let hexPayload = payload.map { String(format: "%02X", $0) }.joined(separator: " ")

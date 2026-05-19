@@ -120,9 +120,9 @@ public final class DatabaseClient: @unchecked Sendable {
                     fullResp = MySQLProtocol.authResponseNative(password: self.config.password, scramble: scramble)
                 }
                 // send auth switch response (length-prefixed)
-                var respBytes = [UInt8]()
-                respBytes.append(UInt8(fullResp.count & 0xFF))
-                respBytes.append(contentsOf: [UInt8](fullResp))
+                let respBytes = fullResp.count.uInt8.data
+                    .appending(fullResp.data)
+                    .array
                 try proto.writePacket(respBytes)
                 // read final response
                 resp = try proto.readPacket()
