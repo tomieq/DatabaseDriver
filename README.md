@@ -155,3 +155,28 @@ sh ./scripts/run_integration_tests.sh
 ```
 
 Integration tests are skipped by default; the test checks `RUN_DOCKER_INTEGRATION=1`.
+
+## Swift Package Manager
+```swift
+import PackageDescription
+
+let package = Package(
+    name: "MyServer",
+    platforms: [
+        .macOS(.v10_15)
+    ],
+    dependencies: [
+        .package(url: "https://github.com/tomieq/DatabaseDriver", branch: "master")
+    ]
+)
+```
+in the target:
+```swift
+    targets: [
+        .executableTarget(
+            name: "AppName",
+            dependencies: [
+                .product(name: "DatabaseDriver", package: "DatabaseDriver")
+            ])
+    ]
+```
