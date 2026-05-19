@@ -79,6 +79,27 @@ try client.run(users.delete().filter(nickname == nil))
 
 `Table`, `Expression`, comparison operators, `&&`, `||`, `!`, and the assignment operator `<-` are available on macOS and Linux. Values are escaped as SQL literals, identifiers are quoted with MySQL backticks, and `nil` optional values compile to `NULL` / `IS NULL` as appropriate.
 
+### Schema builder
+
+Tables and indexes can also be built without hand-written SQL strings.
+
+```swift
+try client.run(users.create(ifNotExists: true) { table in
+	table.column(id, primaryKey: .autoIncrement)
+	table.column(name, type: .varchar(255))
+	table.column(nickname)
+	table.column(enabled, defaultValue: true)
+	table.unique(name, nickname)
+})
+
+try client.run(users.createIndex(name, named: "users_name_idx"))
+
+try client.run(users.dropIndex(name, named: "users_name_idx"))
+try client.run(users.drop(ifExists: true))
+```
+
+Column types are inferred from `Expression` where possible: integers, unsigned integers, `Bool`, `Double`, `String`, `Data`, `DatabaseDate`, `DatabaseTime`, and `DatabaseDateTime` map to MySQL column types. Use `type:` for MySQL-specific choices such as `.varchar(255)`, `.decimal(precision:scale:)`, or `.custom("JSON")`. MySQL supports `IF NOT EXISTS` for table creation, but not for `CREATE INDEX` / `DROP INDEX`, so index builders generate MySQL-compatible statements without those clauses.
+
 ### Codable types
 
 Flat `Codable` models can be inserted, updated, and decoded from selected rows. Property names should match the selected column names.

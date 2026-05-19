@@ -196,6 +196,28 @@ final class IntegrationTests: XCTestCase {
         )
         XCTAssertEqual(decodedAfterUpdate.first?.nickname, nil)
 
+        let schemaTable = Table("schema_api_users")
+        let schemaID = schemaTable.column("id", as: Int64.self)
+        let schemaEmail = schemaTable.column("email", as: String.self)
+        let schemaName = schemaTable.column("name", as: String?.self)
+        let schemaEnabled = schemaTable.column("enabled", as: Bool.self)
+        try client.run(schemaTable.drop(ifExists: true))
+        try client.run(schemaTable.create(ifNotExists: true) { definition in
+            definition.column(schemaID, primaryKey: .autoIncrement)
+            definition.column(schemaEmail, type: .varchar(255), unique: true)
+            definition.column(schemaName)
+            definition.column(schemaEnabled, defaultValue: true)
+        })
+        try client.run(schemaTable.createIndex(schemaEmail, named: "schema_api_users_email_idx"))
+        let schemaInsert = try client.run(schemaTable.insert(schemaEmail <- "ddl@example.com", schemaName <- nil, schemaEnabled <- true))
+        XCTAssertEqual(schemaInsert.affectedRows, 1)
+        let schemaRows = try client.prepare(schemaTable.filter(schemaID == Int64(schemaInsert.lastInsertID)).select(schemaEmail, schemaName, schemaEnabled))
+        XCTAssertEqual(schemaRows.first?.string("email"), "ddl@example.com")
+        XCTAssertEqual(schemaRows.first?["name"], .null)
+        XCTAssertEqual(schemaRows.first?.bool("enabled"), true)
+        try client.run(schemaTable.dropIndex(schemaEmail, named: "schema_api_users_email_idx"))
+        try client.run(schemaTable.drop(ifExists: true))
+
         let concurrentResults = ConcurrentQueryResults()
         DispatchQueue.concurrentPerform(iterations: 12) { index in
             do {

@@ -60,6 +60,37 @@ final class DatabaseDriverTests: XCTestCase {
         XCTAssertEqual(delete.sql, "DELETE FROM `users` WHERE `users`.`nickname` IS NULL")
     }
 
+    func testSchemaAPIBuildsCreateTableSQL() throws {
+        let users = Table("users")
+        let id = users.column("id", as: Int64.self)
+        let email = users.column("email", as: String.self)
+        let name = users.column("name", as: String?.self)
+        let enabled = users.column("enabled", as: Bool.self)
+        let createdAt = users.column("created_at", as: DatabaseDateTime.self)
+
+        let create = users.create(ifNotExists: true) { table in
+            table.column(id, primaryKey: .autoIncrement)
+            table.column(email, type: .varchar(255), unique: true)
+            table.column(name)
+            table.column(enabled, defaultValue: true)
+            table.column(createdAt)
+            table.check(id > 0)
+        }
+
+        XCTAssertEqual(create.sql, "CREATE TABLE IF NOT EXISTS `users` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT NOT NULL, `email` VARCHAR(255) NOT NULL UNIQUE, `name` TEXT, `enabled` BOOL NOT NULL DEFAULT TRUE, `created_at` DATETIME(6) NOT NULL, CHECK (`id` > 0))")
+    }
+
+    func testSchemaAPIBuildsIndexesAndDropSQL() throws {
+        let users = Table("users")
+        let email = users.column("email", as: String.self)
+        let name = users.column("name", as: String?.self)
+
+        XCTAssertEqual(users.createIndex(email).sql, "CREATE INDEX `index_users_on_email` ON `users` (`email`)")
+        XCTAssertEqual(users.createIndex(email, name, named: "users_lookup", unique: true).sql, "CREATE UNIQUE INDEX `users_lookup` ON `users` (`email`, `name`)")
+        XCTAssertEqual(users.dropIndex(email).sql, "DROP INDEX `index_users_on_email` ON `users`")
+        XCTAssertEqual(users.drop(ifExists: true).sql, "DROP TABLE IF EXISTS `users`")
+    }
+
     func testCodableAPIBuildsInsertAndUpdateSQL() throws {
         let users = Table("users")
         let id = users.column("id", as: Int64.self)
