@@ -42,6 +42,43 @@ print(rows.first?["name"] ?? "")
 
 `execute(_:)` returns a `QueryResult` with columns, rows, affected row count, and last inserted id. `query(_:)` is a convenience wrapper for string-only result sets.
 
+## Object query API
+
+For application code that should not assemble SQL strings by hand, the library also exposes a small Swift query builder inspired by SQLite.swift. It still produces plain MySQL SQL internally and uses the same `execute(_:)` path.
+
+```swift
+let users = Table("users")
+let id = users.column("id", as: Int64.self)
+let name = users.column("name", as: String.self)
+let nickname = users.column("nickname", as: String?.self)
+let enabled = users.column("enabled", as: Bool.self)
+
+let insert = try client.run(users.insert(
+	name <- "alice",
+	nickname <- nil,
+	enabled <- true
+))
+print(insert.lastInsertID)
+
+let rows = try client.prepare(
+	users
+		.filter((enabled == true) && (id >= 1))
+		.select(id, name)
+		.order(name.asc())
+		.limit(20)
+)
+
+try client.run(
+	users
+		.update(name <- "Alice")
+		.filter(id == Int64(insert.lastInsertID))
+)
+
+try client.run(users.delete().filter(nickname == nil))
+```
+
+`Table`, `Expression`, comparison operators, `&&`, `||`, `!`, and the assignment operator `<-` are available on macOS and Linux. Values are escaped as SQL literals, identifiers are quoted with MySQL backticks, and `nil` optional values compile to `NULL` / `IS NULL` as appropriate.
+
 ## Async API
 
 The library exposes both synchronous and async variants. In async server code, prefer the async pool methods:

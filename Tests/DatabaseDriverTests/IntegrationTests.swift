@@ -135,6 +135,28 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(row["elapsed"], .time(DatabaseTime(hours: 12, minutes: 34, seconds: 56, microseconds: 1)))
         XCTAssertEqual(row.bytes("payload"), Data([0x68, 0x69]))
 
+        let table = Table("t")
+        let objectID = table.column("id", as: Int64.self)
+        let objectName = table.column("name", as: String.self)
+        let objectNickname = table.column("nickname", as: String?.self)
+        let objectInsert = try client.run(table.insert(objectName <- "bob", objectNickname <- "bobby"))
+        XCTAssertEqual(objectInsert.affectedRows, 1)
+
+        let objectRows = try client.prepare(
+            table
+                .filter(objectID == Int64(objectInsert.lastInsertID))
+                .select(objectName, objectNickname)
+        )
+        XCTAssertEqual(objectRows.first?.string("name"), "bob")
+        XCTAssertEqual(objectRows.first?.string("nickname"), "bobby")
+
+        let missingNickname: String? = nil
+        let objectUpdate = try client.run(table.update(objectNickname <- missingNickname).filter(objectID == Int64(objectInsert.lastInsertID)))
+        XCTAssertEqual(objectUpdate.affectedRows, 1)
+
+        let objectDelete = try client.run(table.delete().filter(objectNickname == missingNickname))
+        XCTAssertGreaterThanOrEqual(objectDelete.affectedRows, 1)
+
         let concurrentResults = ConcurrentQueryResults()
         DispatchQueue.concurrentPerform(iterations: 12) { index in
             do {
