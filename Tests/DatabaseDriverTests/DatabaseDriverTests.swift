@@ -43,6 +43,16 @@ final class DatabaseDriverTests: XCTestCase {
         XCTAssertEqual(hex, "a9993e364706816aba3e25717850c26c9cd0d89d")
     }
 
+    func testAuthScrambleDropsProtocolTerminator() throws {
+        let part1 = Data([1, 2, 3, 4, 5, 6, 7, 8])
+        let part2 = Data([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0])
+
+        XCTAssertEqual(
+            MySQLProtocol.makeAuthScramble(part1: part1, part2: part2),
+            Data([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+        )
+    }
+
     func testObjectAPIBuildsSelectSQL() throws {
         let users = Table("users")
         let id = Expression<Int64>("id")
