@@ -33,7 +33,6 @@ for row in typed.rows {
 	let enabled = row.bool("enabled")
 	let birthday = row["birthday"]
 	let payload = row.bytes("payload")
-	print(id as Any, enabled as Any, birthday as Any, payload as Any)
 }
 
 let rows = try connection.query("SELECT name FROM users")
@@ -44,7 +43,7 @@ print(rows.first?["name"] ?? "")
 
 ## Object query API
 
-For application code that should not assemble SQL strings by hand, the library also exposes a small Swift query builder inspired by SQLite.swift. It still produces plain MySQL SQL internally and uses the same `execute(_:)` path.
+For application code that should not assemble SQL strings by hand, the library also exposes a small Swift query builder. It still produces plain MySQL SQL internally and uses the same `execute(_:)` path.
 
 ```swift
 let users = Table("users")
