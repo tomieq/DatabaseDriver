@@ -51,6 +51,29 @@ private struct SchemaPerson: DatabaseSchemaRepresentable {
     }
 }
 
+private struct IntegrationDatabaseEnvironment {
+    let host: String
+    let port: Int
+    let user: String
+    let password: String
+    let dockerImage: String
+    let dockerContainerName: String
+    let managesDatabaseContainer: Bool
+
+    init(environment: [String: String]) {
+        let externalHost = environment["DB_HOST"]
+        let externalPort = environment["DB_PORT"].flatMap { Int($0) }
+
+        self.host = externalHost ?? "127.0.0.1"
+        self.port = externalPort ?? (externalHost == nil ? 3307 : 3306)
+        self.user = environment["DB_USER"] ?? "root"
+        self.password = environment["DB_PASSWORD"] ?? ""
+        self.dockerImage = environment["DB_DOCKER_IMAGE"] ?? "mysql:9.7.0"
+        self.dockerContainerName = environment["DB_CONTAINER_NAME"] ?? "mysql_integration"
+        self.managesDatabaseContainer = externalHost == nil
+    }
+}
+
 final class IntegrationTests: XCTestCase {
     func shell(_ args: [String]) throws -> (Int32, String) {
         let task = Process()
@@ -69,44 +92,89 @@ final class IntegrationTests: XCTestCase {
         return (task.terminationStatus, (out + err).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    private func startManagedDatabase(using config: IntegrationDatabaseEnvironment) throws -> String {
+        _ = try self.shell(["docker", "rm", "-f", config.dockerContainerName])
+
+        let run = try shell([
+            "docker", "run", "-d",
+            "--name", config.dockerContainerName,
+            "-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes",
+            "-p", "\(config.port):3306",
+            config.dockerImage
+        ])
+        XCTAssertEqual(run.0, 0, "docker run failed: \(run.1)")
+        return run.1
+    }
+
+    private func waitForManagedDatabase(containerID: String) throws {
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline {
+            let logs = try shell(["docker", "logs", containerID])
+            if logs.0 == 0 {
+                let output = logs.1.lowercased()
+                if output.contains("ready for connections") || output.contains("ready for connection") {
+                    return
+                }
+            }
+            Thread.sleep(forTimeInterval: 1)
+        }
+
+        XCTFail("MySQL container did not become ready in time")
+    }
+
+    private func connectWithRetry(config: DatabaseConfig) throws -> Connection {
+        let deadline = Date().addingTimeInterval(30)
+        var lastError: Error?
+
+        while Date() < deadline {
+            let connection = Connection(config: config)
+            do {
+                try connection.connect()
+                return connection
+            } catch {
+                lastError = error
+                connection.disconnect()
+                Thread.sleep(forTimeInterval: 1)
+            }
+        }
+
+        throw lastError ?? NSError(
+            domain: "IntegrationTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for database connection"]
+        )
+    }
+
     func testMySQLDockerIntegration() throws {
         // Only run integration test when explicitly enabled to avoid CI failures.
         if ProcessInfo.processInfo.environment["RUN_DOCKER_INTEGRATION"] != "1" {
             throw XCTSkip("Integration tests disabled. Set RUN_DOCKER_INTEGRATION=1 to enable.")
         }
-        // Check Docker availability
-        let which = try shell(["which", "docker"])
-        if which.0 != 0 { throw XCTSkip("Docker CLI not found; skipping integration test") }
-
-        // Run mysql container with empty root password allowed
-        let run = try shell(["docker", "run", "-d", "-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes", "-p", "3307:3306", "mysql:9.7.0"])
-        XCTAssertEqual(run.0, 0, "docker run failed: \(run.1)")
-        let containerId = run.1
+        let integrationConfig = IntegrationDatabaseEnvironment(environment: ProcessInfo.processInfo.environment)
+        var managedContainerID: String?
         defer {
-            _ = try? shell(["docker", "rm", "-f", containerId])
+            if let managedContainerID {
+                _ = try? shell(["docker", "rm", "-f", managedContainerID])
+            }
         }
 
-        // Wait for MySQL to accept connections by scanning container logs and attempting TCP connect
-        let deadline = Date().addingTimeInterval(120)
-        var ready = false
-        while Date() < deadline {
-            // check logs for readiness message
-            let logs = try shell(["docker", "logs", containerId])
-            if logs.0 == 0 {
-                let out = logs.1.lowercased()
-                if out.contains("ready for connections") || out.contains("ready for connection"), out.contains("port: 3306  mysql") {
-                    ready = true
-                    break
-                }
-            }
-            Thread.sleep(forTimeInterval: 1)
+        if integrationConfig.managesDatabaseContainer {
+            let which = try shell(["which", "docker"])
+            if which.0 != 0 { throw XCTSkip("Docker CLI not found; skipping integration test") }
+
+            let containerId = try startManagedDatabase(using: integrationConfig)
+            managedContainerID = containerId
+            try self.waitForManagedDatabase(containerID: containerId)
         }
-        XCTAssertTrue(ready, "MySQL container did not become ready in time")
 
         // Attempt full MySQL handshake via client
-        let cfg = DatabaseConfig(host: "127.0.0.1", port: 3307, user: "root", password: "")
-        let connection = Connection(config: cfg)
-        try connection.connect()
+        let cfg = DatabaseConfig(
+            host: integrationConfig.host,
+            port: integrationConfig.port,
+            user: integrationConfig.user,
+            password: integrationConfig.password
+        )
+        let connection = try connectWithRetry(config: cfg)
 
         // Run simple DB commands
         try connection.execute("CREATE DATABASE IF NOT EXISTS testdb")
