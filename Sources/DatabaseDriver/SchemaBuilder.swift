@@ -101,11 +101,13 @@ public struct CreateIndexQuery: SQLStatement {
     public let name: String
     public let columns: [String]
     public let unique: Bool
+    public let ifNotExists: Bool
 
     public var sql: String {
         var parts = ["CREATE"]
         if self.unique { parts.append("UNIQUE") }
         parts.append("INDEX")
+        if self.ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(SQLBuilder.quoteIdentifier(self.name))
         parts.append("ON")
         parts.append(self.table.sql)
@@ -117,9 +119,10 @@ public struct CreateIndexQuery: SQLStatement {
 public struct DropIndexQuery: SQLStatement {
     public let table: Table
     public let name: String
+    public let ifExists: Bool
 
     public var sql: String {
-        "DROP INDEX " + SQLBuilder.quoteIdentifier(self.name) + " ON " + self.table.sql
+        "DROP INDEX " + (self.ifExists ? "IF EXISTS " : "") + SQLBuilder.quoteIdentifier(self.name) + " ON " + self.table.sql
     }
 }
 
@@ -271,20 +274,20 @@ extension Table {
         DropTableQuery(table: self, ifExists: ifExists)
     }
 
-    public func createIndex(_ columns: any SQLSelectable..., named name: String? = nil, unique: Bool = false) -> CreateIndexQuery {
-        self.createIndex(columns, named: name, unique: unique)
+    public func createIndex(_ columns: any SQLSelectable..., named name: String? = nil, unique: Bool = false, ifNotExists: Bool = false) -> CreateIndexQuery {
+        self.createIndex(columns, named: name, unique: unique, ifNotExists: ifNotExists)
     }
 
-    public func createIndex(_ columns: [any SQLSelectable], named name: String? = nil, unique: Bool = false) -> CreateIndexQuery {
-        CreateIndexQuery(table: self, name: name ?? self.generatedIndexName(columns: columns), columns: columns.map { $0.ddlColumnSQL }, unique: unique)
+    public func createIndex(_ columns: [any SQLSelectable], named name: String? = nil, unique: Bool = false, ifNotExists: Bool = false) -> CreateIndexQuery {
+        CreateIndexQuery(table: self, name: name ?? self.generatedIndexName(columns: columns), columns: columns.map { $0.ddlColumnSQL }, unique: unique, ifNotExists: ifNotExists)
     }
 
-    public func dropIndex(_ columns: any SQLSelectable..., named name: String? = nil) -> DropIndexQuery {
-        self.dropIndex(columns, named: name)
+    public func dropIndex(_ columns: any SQLSelectable..., named name: String? = nil, ifExists: Bool = false) -> DropIndexQuery {
+        self.dropIndex(columns, named: name, ifExists: ifExists)
     }
 
-    public func dropIndex(_ columns: [any SQLSelectable], named name: String? = nil) -> DropIndexQuery {
-        DropIndexQuery(table: self, name: name ?? self.generatedIndexName(columns: columns))
+    public func dropIndex(_ columns: [any SQLSelectable], named name: String? = nil, ifExists: Bool = false) -> DropIndexQuery {
+        DropIndexQuery(table: self, name: name ?? self.generatedIndexName(columns: columns), ifExists: ifExists)
     }
 
     private func generatedIndexName(columns: [any SQLSelectable]) -> String {

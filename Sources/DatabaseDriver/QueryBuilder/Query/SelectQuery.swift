@@ -64,7 +64,19 @@ public struct SelectQuery: SQLStatement {
         return SelectQuery(table: self.table, columns: self.columns, predicate: combined, orderings: self.orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
     }
 
+    public func `where`(_ predicate: SQLPredicate) -> SelectQuery {
+        self.filter(predicate)
+    }
+
     public func order(_ orderings: SQLOrdering...) -> SelectQuery {
+        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, orderings: self.orderings + orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
+    }
+
+    public func order(_ columns: any SQLSelectable...) -> SelectQuery {
+        self.order(columns.map { SQLOrdering(sql: $0.sql) })
+    }
+
+    public func order(_ orderings: [SQLOrdering]) -> SelectQuery {
         SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, orderings: self.orderings + orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
     }
 

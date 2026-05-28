@@ -33,4 +33,8 @@ public struct UpdateQuery: SQLStatement {
         }
         return UpdateQuery(table: self.table, assignments: self.assignments, predicate: combined)
     }
+
+    public func `where`(_ predicate: SQLPredicate) -> UpdateQuery {
+        self.filter(predicate)
+    }
 }

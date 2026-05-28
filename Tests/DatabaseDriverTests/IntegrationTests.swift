@@ -51,6 +51,10 @@ private struct SchemaPerson: DatabaseSchemaRepresentable {
     }
 }
 
+private enum IntegrationMarkerError: Error {
+    case rollback
+}
+
 private struct IntegrationDatabaseEnvironment {
     let host: String
     let port: Int
@@ -251,6 +255,17 @@ final class IntegrationTests: XCTestCase {
         let objectDelete = try connection.run(table.delete().filter(objectNickname == missingNickname))
         XCTAssertGreaterThanOrEqual(objectDelete.affectedRows, 1)
 
+        try connection.transaction {
+            try connection.run(table.insert(objectName <- "committed", objectNickname <- nil))
+        }
+        XCTAssertEqual(try connection.scalar("SELECT COUNT(*) FROM t WHERE name='committed'")?.stringValue, "1")
+
+        XCTAssertThrowsError(try connection.transaction {
+            try connection.run(table.insert(objectName <- "rolled-back", objectNickname <- nil))
+            throw IntegrationMarkerError.rollback
+        })
+        XCTAssertEqual(try connection.scalar("SELECT COUNT(*) FROM t WHERE name='rolled-back'")?.stringValue, "0")
+
         let codableInsert = try connection.run(try table.insert(CodablePerson(
             name: "carol",
             nickname: "caz",
@@ -357,6 +372,22 @@ final class IntegrationTests: XCTestCase {
         XCTAssertThrowsError(try pool.execute("SELECT * FROM definitely_missing_table"))
         let afterSQLError = try pool.execute("SELECT 42 AS value")
         XCTAssertEqual(afterSQLError.rows.first?.integer("value"), 42)
+
+        let databasePool = ConnectionPool(
+            config: DatabaseConfig(
+                host: integrationConfig.host,
+                port: integrationConfig.port,
+                user: integrationConfig.user,
+                password: integrationConfig.password,
+                database: "testdb"
+            ),
+            maxConnections: 1
+        )
+        defer { databasePool.close() }
+        try databasePool.transaction { pooledConnection in
+            try pooledConnection.run(table.insert(objectName <- "pooled-committed", objectNickname <- nil))
+        }
+        XCTAssertEqual(try databasePool.scalar("SELECT COUNT(*) FROM t WHERE name='pooled-committed'")?.stringValue, "1")
 
         connection.disconnect()
     }

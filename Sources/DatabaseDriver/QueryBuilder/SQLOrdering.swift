@@ -11,4 +11,8 @@ public struct SQLOrdering: Sendable {
     public init(sql: String) {
         self.sql = sql
     }
+
+    public func callAsFunction() -> SQLOrdering {
+        self
+    }
 }

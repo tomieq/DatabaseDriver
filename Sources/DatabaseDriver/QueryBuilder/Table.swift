@@ -32,6 +32,10 @@ public struct Table: Sendable {
         SelectQuery(table: self).filter(predicate)
     }
 
+    public func `where`(_ predicate: SQLPredicate) -> SelectQuery {
+        self.filter(predicate)
+    }
+
     public func insert(_ assignments: SQLAssignment...) -> InsertQuery {
         InsertQuery(table: self, assignments: assignments)
     }

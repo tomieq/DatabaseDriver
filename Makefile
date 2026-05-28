@@ -14,3 +14,5 @@ integration-docker:
 clean-docker:
 	docker rm -f mysql_integration dbdriver-mysql dbdriver-swift-test || true
 	docker network rm dbdriver-test-net || true
+
+all-tests: unit integration integration-docker

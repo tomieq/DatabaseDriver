@@ -107,8 +107,25 @@ final class DatabaseDriverTests: XCTestCase {
 
         XCTAssertEqual(users.createIndex(email).sql, "CREATE INDEX `index_users_on_email` ON `users` (`email`)")
         XCTAssertEqual(users.createIndex(email, name, named: "users_lookup", unique: true).sql, "CREATE UNIQUE INDEX `users_lookup` ON `users` (`email`, `name`)")
+        XCTAssertEqual(users.createIndex(email, ifNotExists: true).sql, "CREATE INDEX IF NOT EXISTS `index_users_on_email` ON `users` (`email`)")
         XCTAssertEqual(users.dropIndex(email).sql, "DROP INDEX `index_users_on_email` ON `users`")
+        XCTAssertEqual(users.dropIndex(email, ifExists: true).sql, "DROP INDEX IF EXISTS `index_users_on_email` ON `users`")
         XCTAssertEqual(users.drop(ifExists: true).sql, "DROP TABLE IF EXISTS `users`")
+    }
+
+    func testSQLiteStyleCompatibilityAPIBuildsSQL() throws {
+        let users = Table("users")
+        let id = Expression<Int64>("id")
+        let email = Expression<String>("email")
+        let balance = Expression<Double>("balance")
+
+        XCTAssertEqual(users.where([1, 2, 3].contains(id)).order(email.desc).limit(1).sql, "SELECT * FROM `users` WHERE `id` IN (1, 2, 3) ORDER BY `email` DESC LIMIT 1")
+        XCTAssertEqual(users.where(email.like("%@example.com")).sql, "SELECT * FROM `users` WHERE `email` LIKE '%@example.com'")
+        XCTAssertEqual(users.insert().sql, "INSERT INTO `users` DEFAULT VALUES")
+        XCTAssertEqual(users.update(balance += 10).where(id === 1).sql, "UPDATE `users` SET `balance` = `balance` + 10.0 WHERE `id` IS 1")
+        XCTAssertEqual(users.update(id++).sql, "UPDATE `users` SET `id` = `id` + 1")
+        XCTAssertEqual(users.delete().where(id !== 1).sql, "DELETE FROM `users` WHERE `id` IS NOT 1")
+        XCTAssertEqual(Expression<Int>(literal: "COUNT(*)").sql, "COUNT(*)")
     }
 
     func testSchemaAPIBuildsCreateTableFromTypeSQL() throws {

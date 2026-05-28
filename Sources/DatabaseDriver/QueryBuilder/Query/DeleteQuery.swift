@@ -31,4 +31,8 @@ public struct DeleteQuery: SQLStatement {
         }
         return DeleteQuery(table: self.table, predicate: combined)
     }
+
+    public func `where`(_ predicate: SQLPredicate) -> DeleteQuery {
+        self.filter(predicate)
+    }
 }
