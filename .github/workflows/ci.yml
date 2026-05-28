@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  unit:
+  unit-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,3 +13,11 @@ jobs:
         run: swift --version || true
       - name: Run unit tests
         run: swift test -v
+  unit-linux-swift-61:
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.1
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run Unit Tests
+        run: swift test --scratch-path /tmp/swifter-build-6.1
