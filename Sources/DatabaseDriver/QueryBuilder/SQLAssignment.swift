@@ -24,11 +24,11 @@ extension SQLAssignment {
         self.sql = columnSQL + " = " + valueSQL
     }
 
-    fileprivate var sqlColumn: String {
+    var sqlColumn: String {
         self.insertColumnSQL
     }
 
-    fileprivate var sqlValue: String {
+    var sqlValue: String {
         self.valueSQL
     }
 }
