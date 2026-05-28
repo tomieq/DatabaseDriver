@@ -1,4 +1,4 @@
-.PHONY: test unit integration clean-docker
+.PHONY: test unit integration integration-docker clean-docker
 
 test: unit
 
@@ -6,7 +6,13 @@ unit:
 	swift test -v
 
 integration:
-	sh ./scripts/run_integration_tests.sh
+	./scripts/run_integration_tests.sh
+
+integration-docker:
+	./scripts/run_docker_integration_tests.sh
 
 clean-docker:
-	docker rm -f mysql_integration || true
+	docker rm -f mysql_integration dbdriver-mysql dbdriver-swift-test || true
+	docker network rm dbdriver-test-net || true
+
+all-tests: unit integration integration-docker

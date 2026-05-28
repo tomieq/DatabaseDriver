@@ -1,182 +1,661 @@
 # DatabaseDriver
 
-Thin MySQL/MariaDB client written in Swift. The library uses the MySQL text protocol directly and keeps dependencies limited to `SwiftExtensions` and `swift-crypto`.
+DatabaseDriver is a pure Swift MySQL/MariaDB client. It speaks the MySQL text protocol directly, supports Swift 6 structured concurrency call sites, and offers a small type-safe SQL layer.
 
-## Usage
+## Contents
+
+- [Installation](#installation)
+- [Getting Started](#getting-started)
+- [Connecting to MySQL](#connecting-to-mysql)
+- [Executing Raw SQL](#executing-raw-sql)
+- [Building Type-Safe SQL](#building-type-safe-sql)
+- [Creating Tables and Indexes](#creating-tables-and-indexes)
+- [Inserting Rows](#inserting-rows)
+- [Selecting Rows](#selecting-rows)
+- [Updating Rows](#updating-rows)
+- [Deleting Rows](#deleting-rows)
+- [Transactions and Savepoints](#transactions-and-savepoints)
+- [Codable Types](#codable-types)
+- [Connection Pools](#connection-pools)
+- [Async API](#async-api)
+- [Type Mapping](#type-mapping)
+- [Error Handling](#error-handling)
+
+## Installation
+
+Add DatabaseDriver to your package dependencies:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/tomieq/DatabaseDriver", branch: "master")
+]
+```
+
+Then add the product to your target:
+
+```swift
+targets: [
+    .executableTarget(
+        name: "App",
+        dependencies: [
+            .product(name: "DatabaseDriver", package: "DatabaseDriver")
+        ]
+    )
+]
+```
+
+Import the module where you use it:
 
 ```swift
 import DatabaseDriver
-
-let client = DatabaseClient(config: DatabaseConfig(
-	host: "127.0.0.1",
-	port: 3306,
-	user: "root",
-	password: "secret",
-	database: "app"
-))
-
-try client.connect()
-defer { client.disconnect() }
-
-let insert = try client.execute("INSERT INTO users(name) VALUES ('alice')")
-print(insert.affectedRows)
-print(insert.lastInsertID)
-
-let result = try client.execute("SELECT id, name FROM users")
-for row in result.rows {
-	print(row.string("name") ?? "")
-}
-
-let typed = try client.execute("SELECT id, enabled, birthday, payload FROM users")
-for row in typed.rows {
-	let id = row.integer("id")
-	let enabled = row.bool("enabled")
-	let birthday = row["birthday"]
-	let payload = row.bytes("payload")
-	print(id as Any, enabled as Any, birthday as Any, payload as Any)
-}
-
-let rows = try client.query("SELECT name FROM users")
-print(rows.first?["name"] ?? "")
 ```
 
-`execute(_:)` returns a `QueryResult` with columns, rows, affected row count, and last inserted id. `query(_:)` is a convenience wrapper for string-only result sets.
+## Getting Started
+
+```swift
+let db = Connection(config: DatabaseConfig(
+    host: "127.0.0.1",
+    port: 3306,
+    user: "root",
+    password: "secret",
+    database: "app"
+))
+
+try db.connect()
+defer { db.disconnect() }
+
+try db.run("CREATE TABLE IF NOT EXISTS users (id BIGINT AUTO_INCREMENT PRIMARY KEY, email TEXT NOT NULL)")
+
+let insert = try db.run("INSERT INTO users (email) VALUES ('alice@example.com')")
+print(insert.lastInsertID)
+
+let rows = try db.prepare("SELECT id, email FROM users")
+for row in rows {
+    print(row.integer("id") ?? 0, row.string("email") ?? "")
+}
+```
+
+`Connection` represents one MySQL session. A single connection serializes commands internally and can be shared safely, but one socket can still execute only one statement at a time. Server applications should usually use `ConnectionPool`.
+
+## Connecting to MySQL
+
+Create a configuration with the host, port, credentials, and optional default database:
+
+```swift
+let config = DatabaseConfig(
+    host: "127.0.0.1",
+    port: 3306,
+    user: "app",
+    password: "secret",
+    database: "app"
+)
+```
+
+Open and close a connection explicitly:
+
+```swift
+let db = Connection(config: config)
+try db.connect()
+defer { db.disconnect() }
+```
+
+Reconnect after a transport failure or when MySQL closes an idle connection:
+
+```swift
+try db.reconnect()
+```
+
+The same methods are also available as async wrappers:
+
+```swift
+try await db.connect()
+await db.disconnect()
+```
+
+## Executing Raw SQL
+
+Use raw SQL when you need full MySQL syntax or quick one-off statements.
+
+```swift
+let result = try db.execute("SELECT id, email FROM users")
+```
+
+`run(_:)` is an alias matching SQLite.swift naming:
+
+```swift
+try db.run("UPDATE users SET email='alice@example.com' WHERE id=1")
+```
+
+`execute(_:)` and `run(_:)` return `QueryResult`:
+
+```swift
+let result = try db.run("INSERT INTO users (email) VALUES ('bob@example.com')")
+print(result.affectedRows)
+print(result.lastInsertID)
+```
+
+For result sets, use `prepare(_:)` to get rows:
+
+```swift
+for row in try db.prepare("SELECT id, email FROM users") {
+    print(row.integer("id") ?? 0)
+    print(row.string("email") ?? "")
+}
+```
+
+Use `scalar(_:)` for the first value of the first row:
+
+```swift
+let count = try db.scalar("SELECT COUNT(*) FROM users")
+print(count?.stringValue ?? "0")
+```
+
+Use `query(_:)` for a simple string-only dictionary view:
+
+```swift
+let rows = try db.query("SELECT email FROM users")
+print(rows.first?["email"] ?? "")
+```
+
+Raw SQL strings are sent through the MySQL text protocol. The query builder escapes literals for generated statements, but raw SQL is your responsibility.
+
+## Building Type-Safe SQL
+
+DatabaseDriver has `Table` and `Expression` types for constructing SQL without hand-assembling identifiers and values.
+
+```swift
+let users = Table("users")
+let id = users.column("id", as: Int64.self)
+let email = users.column("email", as: String.self)
+let name = users.column("name", as: String?.self)
+let enabled = users.column("enabled", as: Bool.self)
+```
+
+You can also create unqualified expressions directly, which is useful for examples and selected columns:
+
+```swift
+let id = Expression<Int64>("id")
+let email = Expression<String>("email")
+let count = Expression<Int>(literal: "COUNT(*)")
+```
+
+Identifiers are quoted with MySQL backticks and values are escaped as SQL literals.
+
+### Predicates
+
+```swift
+users.filter(id == 1)
+users.where(name != nil)
+users.where((enabled == true) && (id >= 10))
+users.where(email.like("%@example.com"))
+users.where([1, 2, 3].contains(id))
+users.where(!(enabled == false))
+```
+
+Supported predicate operators include `==`, `!=`, `>`, `>=`, `<`, `<=`, `===`, `!==`, `&&`, `||`, and prefix `!`. Optional `nil` comparisons generate `IS NULL` or `IS NOT NULL`.
+
+### Ordering and Limits
+
+```swift
+users.select().order(email)
+users.select().order(email.asc)
+users.select().order(email.desc, id.asc)
+users.select().limit(20)
+users.select().limit(20, offset: 40)
+```
+
+For compatibility with older DatabaseDriver code, `email.asc()` and `email.desc()` also work.
+
+## Creating Tables and Indexes
+
+Create tables with a schema builder:
+
+```swift
+try db.run(users.create(ifNotExists: true) { table in
+    table.column(id, primaryKey: .autoIncrement)
+    table.column(email, type: .varchar(255), unique: true)
+    table.column(name)
+    table.column(enabled, defaultValue: true)
+    table.check(id > 0)
+})
+```
+
+Common column options:
+
+```swift
+table.column(id, primaryKey: true)
+table.column(id, primaryKey: .autoIncrement)
+table.column(email, unique: true)
+table.column(enabled, defaultValue: true)
+table.column(name, notNull: false)
+table.column(email, type: .varchar(255))
+table.column(Expression<DatabaseValue>("metadata"), type: .custom("JSON"))
+```
+
+Table constraints are available in the `create` closure:
+
+```swift
+table.primaryKey(id)
+table.unique(email, name)
+table.check(id > 0)
+table.foreignKey([id], references: Table("accounts"), [Expression<Int64>("id")], delete: .cascade)
+```
+
+Create and drop indexes:
+
+```swift
+try db.run(users.createIndex(email))
+try db.run(users.createIndex(email, named: "users_email_idx", unique: true))
+try db.run(users.createIndex(email, ifNotExists: true))
+
+try db.run(users.dropIndex(email))
+try db.run(users.dropIndex(email, ifExists: true))
+```
+
+Drop tables:
+
+```swift
+try db.run(users.drop(ifExists: true))
+```
+
+### Creating Tables from Swift Types
+
+Flat Swift types can be reflected into column definitions. The `Type.self` overload requires `DatabaseSchemaRepresentable` so the library can create a sample instance:
+
+```swift
+struct UserSchema: DatabaseSchemaRepresentable {
+    let id: Int64
+    let email: String
+    let nickname: String?
+
+    init() {
+        self.id = 0
+        self.email = ""
+        self.nickname = nil
+    }
+}
+
+try db.run(Table("users").create(from: UserSchema.self, ifNotExists: true))
+```
+
+You can also pass a sample value:
+
+```swift
+try db.run(Table("users").create(from: UserSchema()))
+```
+
+Add overrides in the closure overload:
+
+```swift
+try db.run(Table("users").create(from: UserSchema.self) { table in
+    table.column(named: "metadata", type: .custom("JSON"), notNull: false)
+})
+```
+
+## Inserting Rows
+
+Use `<-` setters, similar to SQLite.swift:
+
+```swift
+let insert = try db.run(users.insert(
+    email <- "alice@example.com",
+    name <- "Alice",
+    enabled <- true
+))
+
+print(insert.lastInsertID)
+```
+
+Optional values become `NULL`:
+
+```swift
+try db.run(users.insert(name <- nil))
+```
+
+Calling `insert()` without setters generates `DEFAULT VALUES`:
+
+```swift
+try db.run(users.insert())
+```
+
+## Selecting Rows
+
+Prepare a select query:
+
+```swift
+let rows = try db.prepare(
+    users
+        .select(id, email, name)
+        .where(enabled == true)
+        .order(email.asc)
+        .limit(20)
+)
+```
+
+Read values from `DatabaseRow` by column name:
+
+```swift
+for row in rows {
+    let userID = row.integer("id")
+    let emailAddress = row.string("email")
+    let nickname = row["nickname"]
+}
+```
+
+Use `pluck(_:)` for the first row:
+
+```swift
+if let user = try db.pluck(users.where(id == 1)) {
+    print(user.string("email") ?? "")
+}
+```
+
+Use `scalar(_:)` with generated SQL too:
+
+```swift
+let value = try db.scalar(users.select(Expression<Int>(literal: "COUNT(*)")))
+print(value?.stringValue ?? "0")
+```
+
+## Updating Rows
+
+Update all rows by calling `update` on a table:
+
+```swift
+try db.run(users.update(enabled <- true))
+```
+
+Scope updates with `filter` or `where`:
+
+```swift
+try db.run(
+    users
+        .update(name <- "Alice")
+        .where(id == 1)
+)
+```
+
+Convenience setters can use the current column value:
+
+```swift
+let balance = users.column("balance", as: Double.self)
+let loginCount = users.column("login_count", as: Int.self)
+
+try db.run(users.update(balance += 10.0).where(id == 1))
+try db.run(users.update(balance -= 5.0).where(id == 1))
+try db.run(users.update(loginCount++).where(id == 1))
+try db.run(users.update(loginCount--).where(id == 1))
+```
+
+`run(_:)` returns a `QueryResult`; `affectedRows` contains the number of changed rows reported by MySQL.
+
+## Deleting Rows
+
+Delete all rows:
+
+```swift
+try db.run(users.delete())
+```
+
+Delete selected rows:
+
+```swift
+try db.run(users.delete().where(id == 1))
+try db.run(users.delete().filter(name == nil))
+```
+
+## Transactions and Savepoints
+
+Use `transaction` to run a group of statements atomically. The transaction commits when the block returns and rolls back when the block throws.
+
+```swift
+try db.transaction {
+    try db.run(users.insert(email <- "betty@example.com"))
+    try db.run(users.insert(email <- "cathy@example.com"))
+}
+```
+
+The generic return value is preserved:
+
+```swift
+let insertedID = try db.transaction {
+    let result = try db.run(users.insert(email <- "dan@example.com"))
+    return result.lastInsertID
+}
+```
+
+Use `savepoint` inside larger transactions or when you need nested rollback behavior:
+
+```swift
+try db.transaction {
+    try db.run(users.insert(email <- "outer@example.com"))
+
+    try db.savepoint("optional_user") {
+        try db.run(users.insert(email <- "inner@example.com"))
+    }
+}
+```
+
+On a pool, the closure receives the single checked-out connection that owns the transaction:
+
+```swift
+try pool.transaction { db in
+    try db.run(users.insert(email <- "pooled@example.com"))
+    try db.run(users.update(enabled <- true).where(email == "pooled@example.com"))
+}
+```
+
+## Codable Types
+
+Flat `Codable` values can be inserted, updated, and decoded from rows. Property names should match column names.
+
+```swift
+struct User: Codable, Equatable {
+    let id: Int64?
+    let email: String
+    let nickname: String?
+    let enabled: Bool
+}
+
+struct UserPatch: Encodable {
+    let nickname: String?
+}
+```
+
+Insert an `Encodable` value:
+
+```swift
+let result = try db.run(try users.insert(User(
+    id: nil,
+    email: "alice@example.com",
+    nickname: nil,
+    enabled: true
+)))
+```
+
+Update from an `Encodable` value:
+
+```swift
+try db.run(
+    try users
+        .update(UserPatch(nickname: "ally"))
+        .where(id == Int64(result.lastInsertID))
+)
+```
+
+Decode selected rows:
+
+```swift
+let decoded = try db.prepare(
+    users
+        .select(id, email, users.column("nickname", as: String?.self), enabled)
+        .where(id == Int64(result.lastInsertID)),
+    as: User.self
+)
+```
+
+You can also decode manually from rows or query results:
+
+```swift
+let user = try row.decode(User.self)
+let users = try result.decode(User.self)
+```
+
+Codable support is intentionally table-shaped. Top-level models must use keyed containers. Nested keyed containers, unkeyed containers, and single-value top-level rows are not mapped into columns automatically.
+
+## Connection Pools
+
+Use `ConnectionPool` in server applications to bound concurrency and reuse MySQL sessions.
+
+```swift
+let pool = ConnectionPool(
+    config: DatabaseConfig(
+        host: "127.0.0.1",
+        port: 3306,
+        user: "app",
+        password: "secret",
+        database: "app"
+    ),
+    maxConnections: 10
+)
+
+defer { pool.close() }
+
+let rows = try pool.prepare("SELECT id, email FROM users")
+```
+
+Use one-shot methods for independent statements:
+
+```swift
+try pool.run("INSERT INTO audit_log(message) VALUES ('started')")
+let value = try pool.scalar("SELECT COUNT(*) FROM users")
+```
+
+Use `withConnection` when statements must share session state, temporary tables, `USE database`, `LAST_INSERT_ID()`, or explicit MySQL session variables:
+
+```swift
+try pool.withConnection { db in
+    try db.run("SET @request_id = 'abc'")
+    try db.run("INSERT INTO audit_log(message) VALUES (@request_id)")
+}
+```
+
+Use `pool.transaction` for transaction blocks:
+
+```swift
+try pool.transaction { db in
+    try db.run("UPDATE accounts SET balance = balance - 10 WHERE id = 1")
+    try db.run("UPDATE accounts SET balance = balance + 10 WHERE id = 2")
+}
+```
+
+Pool behavior:
+
+- Connections are opened lazily.
+- Idle connections are reused.
+- SQL errors returned by MySQL do not discard a connection.
+- Transport and protocol failures discard a connection.
+- `close()` disconnects idle connections and prevents new checkouts.
 
 ## Async API
 
-The library exposes both synchronous and async variants. In async server code, prefer the async pool methods:
+Most connection and pool operations have async variants:
 
 ```swift
-let pool = DatabasePool(
-	config: DatabaseConfig(user: "app", password: "secret", database: "app"),
-	maxConnections: 10
-)
+try await db.connect()
+let rows = try await db.prepare(users.where(enabled == true))
+try await db.transaction {
+    try await db.run(users.insert(email <- "async@example.com"))
+}
+await db.disconnect()
+```
 
-let result = try await pool.execute("SELECT id, name FROM users")
+Pool APIs are also available asynchronously:
 
-try await pool.withConnection { connection in
-	try await connection.execute("START TRANSACTION")
-	do {
-		try await connection.execute("INSERT INTO audit_log(message) VALUES ('started')")
-		try await connection.execute("COMMIT")
-	} catch {
-		try? await connection.execute("ROLLBACK")
-		throw error
-	}
+```swift
+let result = try await pool.run("SELECT 1")
+
+try await pool.transaction { db in
+    try await db.run(users.insert(email <- "pooled-async@example.com"))
 }
 
 await pool.close()
 ```
 
-The current async methods are compatibility wrappers around the blocking POSIX socket implementation. They keep Swift concurrency call sites clean and avoid blocking the caller's task directly, but they are not a fully non-blocking network stack yet. Use `DatabasePool` to bound concurrency and avoid funneling all requests through one serialized connection.
+The current async implementation wraps the blocking POSIX socket code on a utility queue. This keeps async call sites clean and avoids blocking the caller task directly, but it is not a fully non-blocking network stack.
 
-## Server-side connection management
+## Type Mapping
 
-`DatabaseClient` represents one MySQL connection. It is safe to share between threads because calls to `connect()`, `disconnect()`, and `execute(_:)` are serialized internally, but a single MySQL socket can still process only one command at a time. In a server application, use one shared `DatabasePool` per database configuration instead of one global `DatabaseClient`.
+Rows expose typed helpers and raw `DatabaseValue` values:
 
 ```swift
-let pool = DatabasePool(
-	config: DatabaseConfig(
-		host: "127.0.0.1",
-		port: 3306,
-		user: "app",
-		password: "secret",
-		database: "app"
-	),
-	maxConnections: 10
-)
+row.string("email")
+row.bool("enabled")
+row.integer("id")
+row.unsignedInteger("quota")
+row.double("score")
+row.bytes("payload")
+row["created_at"]
+```
 
-let users = try pool.execute("SELECT id, name FROM users")
+`DatabaseValue` cases:
 
-try pool.withConnection { connection in
-	try connection.execute("START TRANSACTION")
-	do {
-		try connection.execute("UPDATE accounts SET balance = balance - 10 WHERE id = 1")
-		try connection.execute("UPDATE accounts SET balance = balance + 10 WHERE id = 2")
-		try connection.execute("COMMIT")
-	} catch {
-		try? connection.execute("ROLLBACK")
-		throw error
-	}
+- `.null`
+- `.bool(Bool)`
+- `.integer(Int64)`
+- `.unsignedInteger(UInt64)`
+- `.double(Double)`
+- `.decimal(String)`
+- `.string(String)`
+- `.bytes(Data)`
+- `.date(DatabaseDate)`
+- `.time(DatabaseTime)`
+- `.dateTime(DatabaseDateTime)`
+
+Column metadata is available through `DatabaseColumn`:
+
+```swift
+let result = try db.run("SELECT * FROM users")
+for column in result.columns {
+    print(column.name, column.type, column.isUnsigned, column.isBinary, column.length)
 }
-
-pool.close()
 ```
 
-Recommended pattern:
+Schema inference maps Swift values to MySQL column types:
 
-- Create the pool during application startup and keep it for the lifetime of the process.
-- Size `maxConnections` from expected concurrency and MySQL limits. Start small, often near the number of request workers, and keep it below the server's `max_connections` after reserving capacity for migrations, admin tools, and other services.
-- Use `pool.execute(_:)` or `pool.query(_:)` for one-shot statements.
-- Use `pool.withConnection { ... }` when multiple statements must run on the same connection, for example transactions, temporary tables, session variables, or `LAST_INSERT_ID()` workflows.
-- Always close the pool during graceful shutdown with `pool.close()`.
+- `Bool` -> `BOOL`
+- signed integers -> `BIGINT` or related integer types
+- unsigned integers -> unsigned integer types
+- `Double` -> `DOUBLE`
+- `String` -> `TEXT` by default
+- `Data` -> `BLOB`
+- `DatabaseDate` -> `DATE`
+- `DatabaseTime` -> `TIME`
+- `DatabaseDateTime` -> `DATETIME`
 
-Reconnect behavior:
+Use explicit `SQLColumnType` values when you need MySQL-specific choices:
 
-- New pool connections are opened lazily when demand appears.
-- Idle connections are reused.
-- SQL errors returned by MySQL, such as syntax errors or missing tables, do not discard the connection.
-- Transport/protocol failures discard the connection; the next checkout opens a fresh connection.
-- If you manage a raw `DatabaseClient`, call `reconnect()` after a network failure or after MySQL closes an idle connection.
-
-For high-throughput services, prefer many short `pool.execute` calls over sharing one `DatabaseClient` across all requests. Sharing one client is correct, but it serializes all queries and becomes a bottleneck.
-
-## Type mapping
-
-Column metadata is exposed through `DatabaseColumn.type`, `isUnsigned`, `isBinary`, and `length`. Row values are mapped to `DatabaseValue` cases:
-
-- integer MySQL types: `.integer(Int64)` or `.unsignedInteger(UInt64)`
-- `FLOAT` and `DOUBLE`: `.double(Double)`
-- `DECIMAL`: `.decimal(String)` to preserve exact precision
-- `BOOL`/`TINYINT(1)` and one-byte `BIT`: `.bool(Bool)`
-- `DATE`, `TIME`, `DATETIME`, `TIMESTAMP`: `.date`, `.time`, `.dateTime`
-- binary `BLOB`/geometry payloads: `.bytes(Data)`
-- text, enum, set, json, varchar/string columns: `.string(String)`
-- SQL `NULL`: `.null`
-
-## Platform support
-
-The package targets macOS 10.15+, iOS 13+, and Linux. SHA-256 authentication uses `swift-crypto`; sockets use the platform POSIX APIs behind a small internal wrapper.
-
-Test helpers and CI
-
-- Run unit tests:
-
-```bash
-make unit
-```
-
-- Run integration tests locally (requires Docker):
-
-```bash
-make integration
-# or
-sh ./scripts/run_integration_tests.sh
-```
-
-Integration tests are skipped by default; the test checks `RUN_DOCKER_INTEGRATION=1`.
-
-## Swift Package Manager
 ```swift
-import PackageDescription
+.varchar(255)
+.decimal(precision: 10, scale: 2)
+.dateTime(fractionalSecondsPrecision: 6)
+.custom("JSON")
+```
 
-let package = Package(
-    name: "MyServer",
-    platforms: [
-        .macOS(.v10_15)
-    ],
-    dependencies: [
-        .package(url: "https://github.com/tomieq/DatabaseDriver", branch: "master")
-    ]
-)
-```
-in the target:
+## Error Handling
+
+DatabaseDriver throws `ConnectionError` for connection, protocol, and server failures:
+
 ```swift
-    targets: [
-        .executableTarget(
-            name: "AppName",
-            dependencies: [
-                .product(name: "DatabaseDriver", package: "DatabaseDriver")
-            ])
-    ]
+do {
+    try db.run("SELECT * FROM definitely_missing_table")
+} catch ConnectionError.serverError(let code, let message) {
+    print("MySQL error", code, message)
+} catch ConnectionError.connectionFailed(let message) {
+    print("Connection failed", message)
+} catch {
+    print("Unexpected error", error)
+}
 ```
+
+`ConnectionError.serverError` means MySQL returned an error packet. The connection can usually be reused after normal SQL errors. Protocol or transport errors should be treated as connection failures; `ConnectionPool` discards those connections automatically.

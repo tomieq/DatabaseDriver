@@ -135,8 +135,14 @@ final class MySQLProtocol {
                 pluginName = String(bytes: pkt[nameStart..<idx], encoding: .utf8) ?? pluginName
             }
         }
-        let scramble = part1 + part2
+        let scramble = Self.makeAuthScramble(part1: part1, part2: part2)
         return ServerHandshake(scramble: scramble, authPluginName: pluginName)
+    }
+
+    static func makeAuthScramble(part1: Data, part2: Data) -> Data {
+        var secondPart = part2
+        if secondPart.last == 0 { secondPart.removeLast() }
+        return part1 + secondPart
     }
 
     static func authResponseNative(password: String, scramble: Data) -> Data {
