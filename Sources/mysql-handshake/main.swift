@@ -10,8 +10,8 @@ let scenario = argv.count > 5 ? argv[5] : "smoke"
 
 print("mysql-handshake: connecting to \(host):\(port) as \(user) (password length=\(password.count))")
 
-func makeClient() -> DatabaseClient {
-    DatabaseClient(config: DatabaseConfig(host: host, port: port, user: user, password: password))
+func makeClient() -> Connection {
+    Connection(config: DatabaseConfig(host: host, port: port, user: user, password: password))
 }
 
 func runSmoke() throws {

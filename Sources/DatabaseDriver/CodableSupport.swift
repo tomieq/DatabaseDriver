@@ -109,7 +109,7 @@ extension QueryResult {
     }
 }
 
-extension DatabaseClient {
+extension Connection {
     public func prepare<Value: Decodable>(_ query: SelectQuery, as type: Value.Type) throws -> [Value] {
         try self.prepare(query).map { try $0.decode(type) }
     }
@@ -119,7 +119,7 @@ extension DatabaseClient {
     }
 }
 
-extension DatabasePool {
+extension ConnectionPool {
     public func prepare<Value: Decodable>(_ query: SelectQuery, as type: Value.Type) throws -> [Value] {
         try self.prepare(query).map { try $0.decode(type) }
     }

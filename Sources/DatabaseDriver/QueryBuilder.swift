@@ -373,7 +373,7 @@ public func <- <Value: DatabaseExpressionValue>(lhs: Expression<Value?>, rhs: Va
     SQLAssignment(columnSQL: lhs.sql, insertColumnSQL: lhs.unqualifiedSQL, valueSQL: SQLBuilder.literal(rhs?.databaseValue ?? .null))
 }
 
-extension DatabaseClient {
+extension Connection {
     @discardableResult
     public func execute(_ statement: any SQLStatement) throws -> QueryResult {
         try self.execute(statement.sql)
@@ -403,7 +403,7 @@ extension DatabaseClient {
     }
 }
 
-extension DatabasePool {
+extension ConnectionPool {
     @discardableResult
     public func execute(_ statement: any SQLStatement) throws -> QueryResult {
         try self.execute(statement.sql)

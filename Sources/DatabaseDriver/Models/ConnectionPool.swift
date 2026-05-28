@@ -1,17 +1,17 @@
 //
-//  DatabasePool.swift
+//  ConnectionPool.swift
 //  DatabaseDriver
 //
 //  Created by: tomieq on 18/05/2026
 //
 import Foundation
 
-public final class DatabasePool: @unchecked Sendable {
+public final class ConnectionPool: @unchecked Sendable {
     public let config: DatabaseConfig
     public let maxConnections: Int
 
     private let condition = NSCondition()
-    private var idle: [DatabaseClient] = []
+    private var idle: [Connection] = []
     private var totalConnections = 0
     private var isClosed = false
 
@@ -50,7 +50,7 @@ public final class DatabasePool: @unchecked Sendable {
         }
     }
 
-    public func withConnection<T>(_ body: (DatabaseClient) throws -> T) throws -> T {
+    public func withConnection<T>(_ body: (Connection) throws -> T) throws -> T {
         let client = try self.acquire()
         do {
             let result = try body(client)
@@ -63,7 +63,7 @@ public final class DatabasePool: @unchecked Sendable {
         }
     }
 
-    public func withConnection<T: Sendable>(_ body: @escaping @Sendable (DatabaseClient) async throws -> T) async throws -> T {
+    public func withConnection<T: Sendable>(_ body: @escaping @Sendable (Connection) async throws -> T) async throws -> T {
         let client = try await runBlocking {
             try self.acquire()
         }
@@ -101,12 +101,12 @@ public final class DatabasePool: @unchecked Sendable {
         }
     }
 
-    private func acquire() throws -> DatabaseClient {
+    private func acquire() throws -> Connection {
         while true {
             self.condition.lock()
             if self.isClosed {
                 self.condition.unlock()
-                throw DatabaseError.connectionFailed("pool is closed")
+                throw ConnectionError.connectionFailed("pool is closed")
             }
             if let client = self.idle.popLast() {
                 self.condition.unlock()
@@ -115,7 +115,7 @@ public final class DatabasePool: @unchecked Sendable {
             if self.totalConnections < self.maxConnections {
                 self.totalConnections += 1
                 self.condition.unlock()
-                let client = DatabaseClient(config: self.config)
+                let client = Connection(config: self.config)
                 do {
                     try client.connect()
                     return client
@@ -132,7 +132,7 @@ public final class DatabasePool: @unchecked Sendable {
         }
     }
 
-    private func release(_ client: DatabaseClient, reusable: Bool) {
+    private func release(_ client: Connection, reusable: Bool) {
         if reusable {
             self.condition.lock()
             if self.isClosed {
@@ -155,7 +155,7 @@ public final class DatabasePool: @unchecked Sendable {
     }
 
     private func canReuseAfterError(_ error: Error) -> Bool {
-        if case DatabaseError.serverError = error { return true }
+        if case ConnectionError.serverError = error { return true }
         return false
     }
 }

@@ -105,14 +105,14 @@ final class IntegrationTests: XCTestCase {
 
         // Attempt full MySQL handshake via client
         let cfg = DatabaseConfig(host: "127.0.0.1", port: 3307, user: "root", password: "")
-        let client = DatabaseClient(config: cfg)
-        try client.connect()
+        let connection = Connection(config: cfg)
+        try connection.connect()
 
         // Run simple DB commands
-        try client.execute("CREATE DATABASE IF NOT EXISTS testdb")
-        try client.execute("USE testdb")
-        try client.execute("DROP TABLE IF EXISTS t")
-        try client.execute("""
+        try connection.execute("CREATE DATABASE IF NOT EXISTS testdb")
+        try connection.execute("USE testdb")
+        try connection.execute("DROP TABLE IF EXISTS t")
+        try connection.execute("""
         CREATE TABLE t(
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(64),
@@ -128,18 +128,18 @@ final class IntegrationTests: XCTestCase {
             payload BLOB
         )
         """)
-        let insert = try client.execute("""
+        let insert = try connection.execute("""
         INSERT INTO t (name, nickname, signed_value, unsigned_value, decimal_value, double_value, enabled, birthday, created_at, elapsed, payload)
         VALUES ('alice', NULL, -42, 42, 1234.50, 3.5, TRUE, '2026-05-18', '2026-05-18 14:30:15.123456', '12:34:56.000001', X'6869')
         """)
         XCTAssertEqual(insert.affectedRows, 1)
         XCTAssertGreaterThan(insert.lastInsertID, 0)
 
-        let rows = try client.query("SELECT name FROM t WHERE name='alice'")
+        let rows = try connection.query("SELECT name FROM t WHERE name='alice'")
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?["name"], "alice")
 
-        let result = try client.execute("""
+        let result = try connection.execute("""
         SELECT id, name, nickname, signed_value, unsigned_value, decimal_value, double_value, enabled, birthday, created_at, elapsed, payload
         FROM t WHERE id=\(insert.lastInsertID)
         """)
@@ -165,10 +165,10 @@ final class IntegrationTests: XCTestCase {
         let objectID = table.column("id", as: Int64.self)
         let objectName = table.column("name", as: String.self)
         let objectNickname = table.column("nickname", as: String?.self)
-        let objectInsert = try client.run(table.insert(objectName <- "bob", objectNickname <- "bobby"))
+        let objectInsert = try connection.run(table.insert(objectName <- "bob", objectNickname <- "bobby"))
         XCTAssertEqual(objectInsert.affectedRows, 1)
 
-        let objectRows = try client.prepare(
+        let objectRows = try connection.prepare(
             table
                 .filter(objectID == Int64(objectInsert.lastInsertID))
                 .select(objectName, objectNickname)
@@ -177,13 +177,13 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(objectRows.first?.string("nickname"), "bobby")
 
         let missingNickname: String? = nil
-        let objectUpdate = try client.run(table.update(objectNickname <- missingNickname).filter(objectID == Int64(objectInsert.lastInsertID)))
+        let objectUpdate = try connection.run(table.update(objectNickname <- missingNickname).filter(objectID == Int64(objectInsert.lastInsertID)))
         XCTAssertEqual(objectUpdate.affectedRows, 1)
 
-        let objectDelete = try client.run(table.delete().filter(objectNickname == missingNickname))
+        let objectDelete = try connection.run(table.delete().filter(objectNickname == missingNickname))
         XCTAssertGreaterThanOrEqual(objectDelete.affectedRows, 1)
 
-        let codableInsert = try client.run(try table.insert(CodablePerson(
+        let codableInsert = try connection.run(try table.insert(CodablePerson(
             name: "carol",
             nickname: "caz",
             enabled: true,
@@ -192,7 +192,7 @@ final class IntegrationTests: XCTestCase {
         )))
         XCTAssertEqual(codableInsert.affectedRows, 1)
 
-        let codableRows = try client.prepare(
+        let codableRows = try connection.prepare(
             table
                 .filter(objectID == Int64(codableInsert.lastInsertID))
                 .select(objectName, objectNickname, table.column("enabled", as: Bool.self), table.column("birthday", as: DatabaseDate.self), table.column("payload", as: Data.self)),
@@ -200,9 +200,9 @@ final class IntegrationTests: XCTestCase {
         )
         XCTAssertEqual(codableRows, [CodablePerson(name: "carol", nickname: "caz", enabled: true, birthday: DatabaseDate(year: 2026, month: 5, day: 19), payload: Data([0x63, 0x61]))])
 
-        let codableUpdate = try client.run(try table.update(CodablePersonPatch(nickname: nil)).filter(objectID == Int64(codableInsert.lastInsertID)))
+        let codableUpdate = try connection.run(try table.update(CodablePersonPatch(nickname: nil)).filter(objectID == Int64(codableInsert.lastInsertID)))
         XCTAssertEqual(codableUpdate.affectedRows, 1)
-        let decodedAfterUpdate = try client.prepare(
+        let decodedAfterUpdate = try connection.prepare(
             table
                 .filter(objectID == Int64(codableInsert.lastInsertID))
                 .select(objectName, objectNickname, table.column("enabled", as: Bool.self), table.column("birthday", as: DatabaseDate.self), table.column("payload", as: Data.self)),
@@ -215,48 +215,48 @@ final class IntegrationTests: XCTestCase {
         let schemaEmail = schemaTable.column("email", as: String.self)
         let schemaName = schemaTable.column("name", as: String?.self)
         let schemaEnabled = schemaTable.column("enabled", as: Bool.self)
-        try client.run(schemaTable.drop(ifExists: true))
-        try client.run(schemaTable.create(ifNotExists: true) { definition in
+        try connection.run(schemaTable.drop(ifExists: true))
+        try connection.run(schemaTable.create(ifNotExists: true) { definition in
             definition.column(schemaID, primaryKey: .autoIncrement)
             definition.column(schemaEmail, type: .varchar(255), unique: true)
             definition.column(schemaName)
             definition.column(schemaEnabled, defaultValue: true)
         })
-        try client.run(schemaTable.createIndex(schemaEmail, named: "schema_api_users_email_idx"))
-        let schemaInsert = try client.run(schemaTable.insert(schemaEmail <- "ddl@example.com", schemaName <- nil, schemaEnabled <- true))
+        try connection.run(schemaTable.createIndex(schemaEmail, named: "schema_api_users_email_idx"))
+        let schemaInsert = try connection.run(schemaTable.insert(schemaEmail <- "ddl@example.com", schemaName <- nil, schemaEnabled <- true))
         XCTAssertEqual(schemaInsert.affectedRows, 1)
-        let schemaRows = try client.prepare(schemaTable.filter(schemaID == Int64(schemaInsert.lastInsertID)).select(schemaEmail, schemaName, schemaEnabled))
+        let schemaRows = try connection.prepare(schemaTable.filter(schemaID == Int64(schemaInsert.lastInsertID)).select(schemaEmail, schemaName, schemaEnabled))
         XCTAssertEqual(schemaRows.first?.string("email"), "ddl@example.com")
         XCTAssertEqual(schemaRows.first?["name"], .null)
         XCTAssertEqual(schemaRows.first?.bool("enabled"), true)
-        try client.run(schemaTable.dropIndex(schemaEmail, named: "schema_api_users_email_idx"))
-        try client.run(schemaTable.drop(ifExists: true))
+        try connection.run(schemaTable.dropIndex(schemaEmail, named: "schema_api_users_email_idx"))
+        try connection.run(schemaTable.drop(ifExists: true))
 
         let reflectedTable = Table("schema_reflected_users")
         let reflectedID = reflectedTable.column("id", as: Int64.self)
         let reflectedName = reflectedTable.column("name", as: String.self)
         let reflectedNickname = reflectedTable.column("nickname", as: String?.self)
         let reflectedEnabled = reflectedTable.column("enabled", as: Bool.self)
-        try client.run(reflectedTable.drop(ifExists: true))
-        try client.run(reflectedTable.create(from: SchemaPerson.self, ifNotExists: true))
-        let reflectedInsert = try client.run(reflectedTable.insert(reflectedID <- 1, reflectedName <- "reflected", reflectedNickname <- nil, reflectedEnabled <- true))
+        try connection.run(reflectedTable.drop(ifExists: true))
+        try connection.run(reflectedTable.create(from: SchemaPerson.self, ifNotExists: true))
+        let reflectedInsert = try connection.run(reflectedTable.insert(reflectedID <- 1, reflectedName <- "reflected", reflectedNickname <- nil, reflectedEnabled <- true))
         XCTAssertEqual(reflectedInsert.affectedRows, 1)
-        let reflectedRows = try client.prepare(reflectedTable.select(reflectedID, reflectedName, reflectedNickname, reflectedEnabled))
+        let reflectedRows = try connection.prepare(reflectedTable.select(reflectedID, reflectedName, reflectedNickname, reflectedEnabled))
         XCTAssertEqual(reflectedRows.first?.integer("id"), 1)
         XCTAssertEqual(reflectedRows.first?.string("name"), "reflected")
         XCTAssertEqual(reflectedRows.first?["nickname"], .null)
         XCTAssertEqual(reflectedRows.first?.bool("enabled"), true)
-        try client.run(reflectedTable.drop(ifExists: true))
+        try connection.run(reflectedTable.drop(ifExists: true))
 
         let concurrentResults = ConcurrentQueryResults()
         DispatchQueue.concurrentPerform(iterations: 12) { index in
             do {
-                let concurrentResult = try client.execute("SELECT \(index) AS value")
+                let concurrentResult = try connection.execute("SELECT \(index) AS value")
                 let value = concurrentResult.rows.first?.integer("value")
                 if let value {
                     concurrentResults.append(value: value)
                 } else {
-                    concurrentResults.append(error: DatabaseError.protocolError("missing concurrent value"))
+                    concurrentResults.append(error: ConnectionError.protocolError("missing concurrent value"))
                 }
             } catch {
                 concurrentResults.append(error: error)
@@ -266,7 +266,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(snapshot.errors.isEmpty, "Concurrent queries failed: \(snapshot.errors)")
         XCTAssertEqual(snapshot.values.sorted(), Array(0..<12).map(Int64.init))
 
-        let pool = DatabasePool(config: cfg, maxConnections: 3)
+        let pool = ConnectionPool(config: cfg, maxConnections: 3)
         defer { pool.close() }
         try pool.execute("USE testdb")
         let pooledResults = ConcurrentQueryResults()
@@ -276,7 +276,7 @@ final class IntegrationTests: XCTestCase {
                 if let value = pooledResult.rows.first?.integer("value") {
                     pooledResults.append(value: value)
                 } else {
-                    pooledResults.append(error: DatabaseError.protocolError("missing pooled value"))
+                    pooledResults.append(error: ConnectionError.protocolError("missing pooled value"))
                 }
             } catch {
                 pooledResults.append(error: error)
@@ -290,6 +290,6 @@ final class IntegrationTests: XCTestCase {
         let afterSQLError = try pool.execute("SELECT 42 AS value")
         XCTAssertEqual(afterSQLError.rows.first?.integer("value"), 42)
 
-        client.disconnect()
+        connection.disconnect()
     }
 }

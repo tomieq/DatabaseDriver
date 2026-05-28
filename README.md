@@ -7,7 +7,7 @@ Thin MySQL/MariaDB client written in Swift. The library uses the MySQL text prot
 ```swift
 import DatabaseDriver
 
-let client = DatabaseClient(config: DatabaseConfig(
+let connection = Connection(config: DatabaseConfig(
 	host: "127.0.0.1",
 	port: 3306,
 	user: "root",
@@ -15,19 +15,19 @@ let client = DatabaseClient(config: DatabaseConfig(
 	database: "app"
 ))
 
-try client.connect()
-defer { client.disconnect() }
+try connection.connect()
+defer { connection.disconnect() }
 
-let insert = try client.execute("INSERT INTO users(name) VALUES ('alice')")
+let insert = try connection.execute("INSERT INTO users(name) VALUES ('alice')")
 print(insert.affectedRows)
 print(insert.lastInsertID)
 
-let result = try client.execute("SELECT id, name FROM users")
+let result = try connection.execute("SELECT id, name FROM users")
 for row in result.rows {
 	print(row.string("name") ?? "")
 }
 
-let typed = try client.execute("SELECT id, enabled, birthday, payload FROM users")
+let typed = try connection.execute("SELECT id, enabled, birthday, payload FROM users")
 for row in typed.rows {
 	let id = row.integer("id")
 	let enabled = row.bool("enabled")
@@ -36,7 +36,7 @@ for row in typed.rows {
 	print(id as Any, enabled as Any, birthday as Any, payload as Any)
 }
 
-let rows = try client.query("SELECT name FROM users")
+let rows = try connection.query("SELECT name FROM users")
 print(rows.first?["name"] ?? "")
 ```
 
@@ -53,14 +53,14 @@ let name = users.column("name", as: String.self)
 let nickname = users.column("nickname", as: String?.self)
 let enabled = users.column("enabled", as: Bool.self)
 
-let insert = try client.run(users.insert(
+let insert = try connection.run(users.insert(
 	name <- "alice",
 	nickname <- nil,
 	enabled <- true
 ))
 print(insert.lastInsertID)
 
-let rows = try client.prepare(
+let rows = try connection.prepare(
 	users
 		.filter((enabled == true) && (id >= 1))
 		.select(id, name)
@@ -68,13 +68,13 @@ let rows = try client.prepare(
 		.limit(20)
 )
 
-try client.run(
+try connection.run(
 	users
 		.update(name <- "Alice")
 		.filter(id == Int64(insert.lastInsertID))
 )
 
-try client.run(users.delete().filter(nickname == nil))
+try connection.run(users.delete().filter(nickname == nil))
 ```
 
 `Table`, `Expression`, comparison operators, `&&`, `||`, `!`, and the assignment operator `<-` are available on macOS and Linux. Values are escaped as SQL literals, identifiers are quoted with MySQL backticks, and `nil` optional values compile to `NULL` / `IS NULL` as appropriate.
@@ -84,7 +84,7 @@ try client.run(users.delete().filter(nickname == nil))
 Tables and indexes can also be built without hand-written SQL strings.
 
 ```swift
-try client.run(users.create(ifNotExists: true) { table in
+try connection.run(users.create(ifNotExists: true) { table in
 	table.column(id, primaryKey: .autoIncrement)
 	table.column(name, type: .varchar(255))
 	table.column(nickname)
@@ -92,10 +92,10 @@ try client.run(users.create(ifNotExists: true) { table in
 	table.unique(name, nickname)
 })
 
-try client.run(users.createIndex(name, named: "users_name_idx"))
+try connection.run(users.createIndex(name, named: "users_name_idx"))
 
-try client.run(users.dropIndex(name, named: "users_name_idx"))
-try client.run(users.drop(ifExists: true))
+try connection.run(users.dropIndex(name, named: "users_name_idx"))
+try connection.run(users.drop(ifExists: true))
 ```
 
 Column types are inferred from `Expression` where possible: integers, unsigned integers, `Bool`, `Double`, `String`, `Data`, `DatabaseDate`, `DatabaseTime`, and `DatabaseDateTime` map to MySQL column types. Use `type:` for MySQL-specific choices such as `.varchar(255)`, `.decimal(precision:scale:)`, or `.custom("JSON")`. MySQL supports `IF NOT EXISTS` for table creation, but not for `CREATE INDEX` / `DROP INDEX`, so index builders generate MySQL-compatible statements without those clauses.
@@ -115,20 +115,20 @@ struct User: DatabaseSchemaRepresentable {
 	}
 }
 
-try client.run(Table("car_users").create(from: User.self, ifNotExists: true))
+try connection.run(Table("car_users").create(from: User.self, ifNotExists: true))
 // CREATE TABLE IF NOT EXISTS `car_users` (`id` BIGINT NOT NULL, `name` TEXT NOT NULL, `nickname` TEXT)
 ```
 
 For models that cannot provide `init()`, pass a sample instance instead:
 
 ```swift
-try client.run(Table("car_users").create(from: User(id: 0, name: "", nickname: nil)))
+try connection.run(Table("car_users").create(from: User(id: 0, name: "", nickname: nil)))
 ```
 
 `create(from:)` is intentionally a convenience for flat schemas. Use the closure overload to add constraints or override ambiguous/custom columns:
 
 ```swift
-try client.run(Table("car_users").create(from: User.self) { table in
+try connection.run(Table("car_users").create(from: User.self) { table in
 	table.column(named: "metadata", type: .custom("JSON"), notNull: false)
 })
 ```
@@ -149,21 +149,21 @@ struct UserPatch: Encodable {
 	let nickname: String?
 }
 
-let inserted = try client.run(try users.insert(User(
+let inserted = try connection.run(try users.insert(User(
 	id: nil,
 	name: "alice",
 	nickname: nil,
 	enabled: true
 )))
 
-let decoded = try client.prepare(
+let decoded = try connection.prepare(
 	users
 		.filter(id == Int64(inserted.lastInsertID))
 		.select(id, name, nickname, enabled),
 	as: User.self
 )
 
-try client.run(
+try connection.run(
 	try users
 		.update(UserPatch(nickname: "ally"))
 		.filter(id == Int64(inserted.lastInsertID))
@@ -249,7 +249,7 @@ Reconnect behavior:
 - Transport/protocol failures discard the connection; the next checkout opens a fresh connection.
 - If you manage a raw `DatabaseClient`, call `reconnect()` after a network failure or after MySQL closes an idle connection.
 
-For high-throughput services, prefer many short `pool.execute` calls over sharing one `DatabaseClient` across all requests. Sharing one client is correct, but it serializes all queries and becomes a bottleneck.
+For high-throughput services, prefer many short `pool.execute` calls over sharing one `DatabaseClient` across all requests. Sharing one connection is correct, but it serializes all queries and becomes a bottleneck.
 
 ## Type mapping
 

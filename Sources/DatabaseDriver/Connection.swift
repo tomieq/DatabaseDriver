@@ -1,12 +1,12 @@
 import Foundation
 
-public enum DatabaseError: Error, Sendable {
+public enum ConnectionError: Error, Sendable {
     case connectionFailed(String)
     case protocolError(String)
     case serverError(code: Int, message: String)
 }
 
-public final class DatabaseClient: @unchecked Sendable {
+public final class Connection: @unchecked Sendable {
     let config: DatabaseConfig
     var socket: NetworkSocket?
     var sequence: UInt8 = 0
@@ -81,8 +81,8 @@ public final class DatabaseClient: @unchecked Sendable {
     }
 
     func performHandshake() throws {
-        guard self.socket != nil else { throw DatabaseError.connectionFailed("no socket") }
-        guard let proto else { throw DatabaseError.connectionFailed("no protocol") }
+        guard self.socket != nil else { throw ConnectionError.connectionFailed("no socket") }
+        guard let proto else { throw ConnectionError.connectionFailed("no protocol") }
         let serverHandshake = try proto.readGreeting()
         let authResp: Data
         if serverHandshake.authPluginName == "caching_sha2_password" {
@@ -100,7 +100,7 @@ public final class DatabaseClient: @unchecked Sendable {
                 return
             } else if first == 0xFF {
                 let (code, msg) = MySQLProtocol.parseErrorPacket(resp)
-                throw DatabaseError.serverError(code: code, message: msg)
+                throw ConnectionError.serverError(code: code, message: msg)
             } else if first == 0xFE {
                 // Auth switch request: server may request full auth for plugin (e.g., caching_sha2_password)
                 // Format: 0xFE, plugin_name (NUL), scramble
@@ -130,19 +130,19 @@ public final class DatabaseClient: @unchecked Sendable {
                     if resp[0] == 0x00 { proto.resetSequence(); return }
                     if resp[0] == 0xFF {
                         let (code, msg) = MySQLProtocol.parseErrorPacket(resp)
-                        throw DatabaseError.serverError(code: code, message: msg)
+                        throw ConnectionError.serverError(code: code, message: msg)
                     }
                 }
             }
         }
-        throw DatabaseError.protocolError("unexpected auth response")
+        throw ConnectionError.protocolError("unexpected auth response")
     }
 
     @discardableResult
     public func execute(_ sql: String) throws -> QueryResult {
         try self.withLock {
-            guard self.socket != nil else { throw DatabaseError.connectionFailed("no socket") }
-            guard let proto else { throw DatabaseError.connectionFailed("no protocol") }
+            guard self.socket != nil else { throw ConnectionError.connectionFailed("no socket") }
+            guard let proto else { throw ConnectionError.connectionFailed("no protocol") }
             try proto.sendQuery(sql: sql)
             let first = try proto.readPacket()
             if first.count == 0 { return QueryResult(columns: [], rows: [], affectedRows: 0, lastInsertID: 0) }
@@ -152,7 +152,7 @@ public final class DatabaseClient: @unchecked Sendable {
             }
             if first[0] == 0xFF {
                 let (code, msg) = MySQLProtocol.parseErrorPacket(first)
-                throw DatabaseError.serverError(code: code, message: msg)
+                throw ConnectionError.serverError(code: code, message: msg)
             }
             // Result set: first packet is column count (len-encoded-int)
             var offset = 0

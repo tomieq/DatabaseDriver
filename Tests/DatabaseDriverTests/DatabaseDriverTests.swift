@@ -192,13 +192,13 @@ final class DatabaseDriverTests: XCTestCase {
     }
 
     func testAsyncPoolReportsClosedPool() async throws {
-        let pool = DatabasePool(config: DatabaseConfig(user: "root", password: ""), maxConnections: 1)
+        let pool = ConnectionPool(config: DatabaseConfig(user: "root", password: ""), maxConnections: 1)
         await pool.close()
 
         do {
             _ = try await pool.execute("SELECT 1")
             XCTFail("Expected closed pool to throw")
-        } catch DatabaseError.connectionFailed(let message) {
+        } catch ConnectionError.connectionFailed(let message) {
             XCTAssertEqual(message, "pool is closed")
         } catch {
             XCTFail("Unexpected error: \(error)")
