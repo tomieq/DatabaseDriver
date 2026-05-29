@@ -237,6 +237,8 @@ final class IntegrationTests: XCTestCase {
         let objectID = table.column("id", as: Int64.self)
         let objectName = table.column("name", as: String.self)
         let objectNickname = table.column("nickname", as: String?.self)
+        let objectSignedValue = table.column("signed_value", as: Int64?.self)
+        let objectDoubleValue = table.column("double_value", as: Double?.self)
         let objectInsert = try connection.run(table.insert(objectName <- "bob", objectNickname <- "bobby"))
         XCTAssertEqual(objectInsert.affectedRows, 1)
 
@@ -247,6 +249,15 @@ final class IntegrationTests: XCTestCase {
         )
         XCTAssertEqual(objectRows.first?.string("name"), "bob")
         XCTAssertEqual(objectRows.first?.string("nickname"), "bobby")
+
+        XCTAssertEqual(try connection.scalar(table.count), 2)
+        XCTAssertEqual(try connection.scalar(table.filter(objectNickname != nil).count), 1)
+        XCTAssertEqual(try connection.scalar(table.select(objectNickname.count)), 1)
+        XCTAssertEqual(try connection.scalar(table.select(objectName.distinct.count)), 2)
+        XCTAssertEqual(try connection.scalar(table.select(objectSignedValue.min)), -42)
+        XCTAssertEqual(try connection.scalar(table.select(objectSignedValue.max)), -42)
+        XCTAssertEqual(try connection.scalar(table.select(objectDoubleValue.average)), 3.5)
+        XCTAssertEqual(try connection.scalar(table.select(objectDoubleValue.sum)), 3.5)
 
         let missingNickname: String? = nil
         let objectUpdate = try connection.run(table.update(objectNickname <- missingNickname).filter(objectID == Int64(objectInsert.lastInsertID)))
