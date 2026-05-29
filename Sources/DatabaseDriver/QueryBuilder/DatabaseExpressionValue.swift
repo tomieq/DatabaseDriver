@@ -34,6 +34,14 @@ extension Double: DatabaseExpressionValue {
     public var databaseValue: DatabaseValue { .double(self) }
 }
 
+extension Float: DatabaseExpressionValue {
+    public var databaseValue: DatabaseValue { .double(Double(self)) }
+}
+
+extension Decimal: DatabaseExpressionValue {
+    public var databaseValue: DatabaseValue { .decimal(NSDecimalNumber(decimal: self).stringValue) }
+}
+
 extension Bool: DatabaseExpressionValue {
     public var databaseValue: DatabaseValue { .bool(self) }
 }

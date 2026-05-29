@@ -138,6 +138,53 @@ final class DatabaseDriverTests: XCTestCase {
         XCTAssertEqual(Expression<Int>(literal: "COUNT(*)").sql, "COUNT(*)")
     }
 
+    func testAggregateAPIBuildsScalarQueries() throws {
+        let users = Table("users")
+        let id = Expression<Int64>("id")
+        let name = Expression<String?>("name")
+        let balance = Expression<Double>("balance")
+
+        let tableCount: SQLScalarQuery<Int> = users.count
+        XCTAssertEqual(tableCount.sql, "SELECT count(*) FROM `users`")
+
+        let filteredCount: SQLScalarQuery<Int> = users.filter(name != nil).count
+        XCTAssertEqual(filteredCount.sql, "SELECT count(*) FROM `users` WHERE `name` IS NOT NULL")
+
+        let nameCount: SQLScalarQuery<Int> = users.select(name.count)
+        XCTAssertEqual(nameCount.sql, "SELECT count(`name`) FROM `users`")
+
+        let maxID: SQLScalarQuery<Int64?> = users.select(id.max)
+        XCTAssertEqual(maxID.sql, "SELECT max(`id`) FROM `users`")
+
+        let minID: SQLScalarQuery<Int64?> = users.select(id.min)
+        XCTAssertEqual(minID.sql, "SELECT min(`id`) FROM `users`")
+
+        let averageBalance: SQLScalarQuery<Double?> = users.select(balance.average)
+        XCTAssertEqual(averageBalance.sql, "SELECT avg(`balance`) FROM `users`")
+
+        let sumBalance: SQLScalarQuery<Double?> = users.select(balance.sum)
+        XCTAssertEqual(sumBalance.sql, "SELECT sum(`balance`) FROM `users`")
+
+        let totalBalance: SQLScalarQuery<Double> = users.select(balance.total)
+        XCTAssertEqual(totalBalance.sql, "SELECT total(`balance`) FROM `users`")
+
+        let distinctNameCount: SQLScalarQuery<Int> = users.select(name.distinct.count)
+        XCTAssertEqual(distinctNameCount.sql, "SELECT count(DISTINCT `name`) FROM `users`")
+    }
+
+    func testAggregateScalarQueriesDecodeValues() throws {
+        let users = Table("users")
+        let id = Expression<Int64>("id")
+        let balance = Expression<Double>("balance")
+
+        XCTAssertEqual(try users.count.decodeScalar(.integer(3)), 3)
+        XCTAssertEqual(try users.select(id.max).decodeScalar(.integer(42)), 42)
+        XCTAssertNil(try users.select(id.max).decodeScalar(.null))
+        XCTAssertEqual(try users.select(balance.average).decodeScalar(.decimal("12.5")), 12.5)
+        XCTAssertEqual(try users.select(balance.total).decodeScalar(.double(0.0)), 0.0)
+        XCTAssertEqual(try users.select(balance.total).decodeScalar(.null), 0.0)
+    }
+
     func testSchemaAPIBuildsCreateTableFromTypeSQL() throws {
         let users = Table("car_users")
 

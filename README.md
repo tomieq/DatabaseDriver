@@ -12,6 +12,7 @@ DatabaseDriver is a pure Swift MySQL/MariaDB client. It speaks the MySQL text pr
 - [Creating Tables and Indexes](#creating-tables-and-indexes)
 - [Inserting Rows](#inserting-rows)
 - [Selecting Rows](#selecting-rows)
+- [Aggregate Scalar Queries](#aggregate-scalar-queries)
 - [Updating Rows](#updating-rows)
 - [Deleting Rows](#deleting-rows)
 - [Transactions and Savepoints](#transactions-and-savepoints)
@@ -353,9 +354,52 @@ if let user = try db.pluck(users.where(id == 1)) {
 Use `scalar(_:)` with generated SQL too:
 
 ```swift
-let value = try db.scalar(users.select(Expression<Int>(literal: "COUNT(*)")))
-print(value?.stringValue ?? "0")
+let count: Int = try db.scalar(users.count)
+print(count)
 ```
+
+## Aggregate Scalar Queries
+
+Aggregate helpers build single-column scalar queries and can be passed directly to `scalar(_:)`. The typed overload decodes the returned `DatabaseValue` into the aggregate's Swift result type.
+
+```swift
+let count: Int = try db.scalar(users.count)
+// SELECT count(*) FROM `users`
+
+let activeCount: Int = try db.scalar(users.where(enabled == true).count)
+// SELECT count(*) FROM `users` WHERE `users`.`enabled` = TRUE
+```
+
+Column `count` counts non-`NULL` values in that column. Prefix an expression with `distinct` to emit `DISTINCT` inside the aggregate.
+
+```swift
+let namedUsers: Int = try db.scalar(users.select(name.count))
+// SELECT count(`users`.`name`) FROM `users`
+
+let uniqueNames: Int = try db.scalar(users.select(name.distinct.count))
+// SELECT count(DISTINCT `users`.`name`) FROM `users`
+```
+
+Comparable columns support `max` and `min`; numeric columns support `average`, `sum`, and `total`.
+
+```swift
+let newestID: Int64? = try db.scalar(users.select(id.max))
+// SELECT max(`users`.`id`) FROM `users`
+
+let firstID: Int64? = try db.scalar(users.select(id.min))
+// SELECT min(`users`.`id`) FROM `users`
+
+let averageBalance: Double? = try db.scalar(users.select(balance.average))
+// SELECT avg(`users`.`balance`) FROM `users`
+
+let balanceSum: Double? = try db.scalar(users.select(balance.sum))
+// SELECT sum(`users`.`balance`) FROM `users`
+
+let balanceTotal: Double = try db.scalar(users.select(balance.total))
+// SELECT total(`users`.`balance`) FROM `users`
+```
+
+`average`, `sum`, `min`, and `max` return optionals because an empty result can produce `NULL`. `total` returns `Double` and decodes `NULL` as `0.0`.
 
 ## Updating Rows
 
