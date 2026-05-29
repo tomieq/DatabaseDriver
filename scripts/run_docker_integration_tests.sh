@@ -12,6 +12,7 @@ DB_PASSWORD=${DB_PASSWORD:-}
 cleanup() {
   docker rm -f "$SWIFT_CONTAINER" "$MYSQL_CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
+  swift package clean
 }
 
 cleanup
