@@ -68,6 +68,20 @@ final class DatabaseDriverTests: XCTestCase {
         XCTAssertEqual(query.sql, "SELECT `id`, `name` FROM `users` WHERE (`id` >= 10) AND (`enabled` = TRUE) ORDER BY `name` ASC LIMIT 5 OFFSET 10")
     }
 
+    func testObjectAPIBuildsGroupedSelectSQL() throws {
+        let temperature = Table("temperature")
+        let id = temperature.column("id", as: Int64.self)
+        let area = temperature.column("area", as: String.self)
+        let value = temperature.column("temperature", as: Double.self)
+
+        let query = temperature
+            .select(id.max, area, value)
+            .group(by: area)
+            .order(area.asc)
+
+        XCTAssertEqual(query.sql, "SELECT max(`temperature`.`id`), `temperature`.`area`, `temperature`.`temperature` FROM `temperature` GROUP BY `temperature`.`area` ORDER BY `temperature`.`area` ASC")
+    }
+
     func testObjectAPIBuildsInsertUpdateAndDeleteSQL() throws {
         let users = Table("users")
         let id = users.column("id", as: Int64.self)
@@ -170,6 +184,9 @@ final class DatabaseDriverTests: XCTestCase {
 
         let distinctNameCount: SQLScalarQuery<Int> = users.select(name.distinct.count)
         XCTAssertEqual(distinctNameCount.sql, "SELECT count(DISTINCT `name`) FROM `users`")
+
+        let groupedCount: SQLScalarQuery<Int> = users.where(name != nil).group(by: name).order(name.asc).limit(3).count
+        XCTAssertEqual(groupedCount.sql, "SELECT count(*) FROM `users` WHERE `name` IS NOT NULL GROUP BY `name` ORDER BY `name` ASC LIMIT 3")
     }
 
     func testAggregateScalarQueriesDecodeValues() throws {

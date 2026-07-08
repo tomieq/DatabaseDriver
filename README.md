@@ -207,6 +207,20 @@ users.select().limit(20, offset: 40)
 
 For compatibility with older DatabaseDriver code, `email.asc()` and `email.desc()` also work.
 
+### Grouping
+
+Use `group(by:)` to emit `GROUP BY` clauses on selected columns or expressions.
+
+```swift
+let latestTemperatures = temperatures
+    .select(id.max, area, value)
+    .group(by: area)
+    .order(area.asc)
+
+print(latestTemperatures.sql)
+// SELECT max(`temperatures`.`id`), `temperatures`.`area`, `temperatures`.`value` FROM `temperatures` GROUP BY `temperatures`.`area` ORDER BY `temperatures`.`area` ASC
+```
+
 ## Creating Tables and Indexes
 
 Create tables with a schema builder:
@@ -369,6 +383,8 @@ let count: Int = try db.scalar(users.count)
 let activeCount: Int = try db.scalar(users.where(enabled == true).count)
 // SELECT count(*) FROM `users` WHERE `users`.`enabled` = TRUE
 ```
+
+Aggregate helpers now preserve the rest of the select query, so filtering, grouping, ordering, and limits remain intact when you derive a scalar query.
 
 Column `count` counts non-`NULL` values in that column. Prefix an expression with `distinct` to emit `DISTINCT` inside the aggregate.
 

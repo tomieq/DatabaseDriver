@@ -9,6 +9,7 @@ public struct SelectQuery: SQLStatement {
     public let table: Table
     public let columns: [String]
     public let predicate: SQLPredicate?
+    public let groupings: [String]
     public let orderings: [SQLOrdering]
     public let limitValue: Int?
     public let offsetValue: Int?
@@ -17,6 +18,7 @@ public struct SelectQuery: SQLStatement {
         table: Table,
         columns: [String] = ["*"],
         predicate: SQLPredicate? = nil,
+        groupings: [String] = [],
         orderings: [SQLOrdering] = [],
         limitValue: Int? = nil,
         offsetValue: Int? = nil
@@ -24,6 +26,7 @@ public struct SelectQuery: SQLStatement {
         self.table = table
         self.columns = columns.isEmpty ? ["*"] : columns
         self.predicate = predicate
+        self.groupings = groupings
         self.orderings = orderings
         self.limitValue = limitValue
         self.offsetValue = offsetValue
@@ -34,6 +37,10 @@ public struct SelectQuery: SQLStatement {
         if let predicate {
             parts.append("WHERE")
             parts.append(predicate.sql)
+        }
+        if !self.groupings.isEmpty {
+            parts.append("GROUP BY")
+            parts.append(self.groupings.joined(separator: ", "))
         }
         if !self.orderings.isEmpty {
             parts.append("ORDER BY")
@@ -51,7 +58,7 @@ public struct SelectQuery: SQLStatement {
     }
 
     public func select(_ columns: any SQLSelectable...) -> SelectQuery {
-        SelectQuery(table: self.table, columns: columns.map(\.sql), predicate: self.predicate, orderings: self.orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
+        SelectQuery(table: self.table, columns: columns.map(\.sql), predicate: self.predicate, groupings: self.groupings, orderings: self.orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
     }
 
     public func filter(_ predicate: SQLPredicate) -> SelectQuery {
@@ -61,15 +68,27 @@ public struct SelectQuery: SQLStatement {
         } else {
             combined = predicate
         }
-        return SelectQuery(table: self.table, columns: self.columns, predicate: combined, orderings: self.orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
+        return SelectQuery(table: self.table, columns: self.columns, predicate: combined, groupings: self.groupings, orderings: self.orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
     }
 
     public func `where`(_ predicate: SQLPredicate) -> SelectQuery {
         self.filter(predicate)
     }
 
+    public func group(by columns: any SQLSelectable...) -> SelectQuery {
+        self.group(by: columns.map(\.sql))
+    }
+
+    public func group(by columns: [any SQLSelectable]) -> SelectQuery {
+        self.group(by: columns.map(\.sql))
+    }
+
+    private func group(by columns: [String]) -> SelectQuery {
+        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, groupings: self.groupings + columns, orderings: self.orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
+    }
+
     public func order(_ orderings: SQLOrdering...) -> SelectQuery {
-        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, orderings: self.orderings + orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
+        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, groupings: self.groupings, orderings: self.orderings + orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
     }
 
     public func order(_ columns: any SQLSelectable...) -> SelectQuery {
@@ -77,10 +96,10 @@ public struct SelectQuery: SQLStatement {
     }
 
     public func order(_ orderings: [SQLOrdering]) -> SelectQuery {
-        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, orderings: self.orderings + orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
+        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, groupings: self.groupings, orderings: self.orderings + orderings, limitValue: self.limitValue, offsetValue: self.offsetValue)
     }
 
     public func limit(_ limit: Int, offset: Int? = nil) -> SelectQuery {
-        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, orderings: self.orderings, limitValue: limit, offsetValue: offset)
+        SelectQuery(table: self.table, columns: self.columns, predicate: self.predicate, groupings: self.groupings, orderings: self.orderings, limitValue: limit, offsetValue: offset)
     }
 }

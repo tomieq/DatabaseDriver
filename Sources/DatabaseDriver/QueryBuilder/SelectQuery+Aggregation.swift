@@ -18,7 +18,15 @@ extension SelectQuery {
 
     private func aggregate<Value>(_ sql: String, decodeScalar: @escaping @Sendable (DatabaseValue?) throws -> Value) -> SQLScalarQuery<Value> {
         SQLScalarQuery(
-            query: SelectQuery(table: self.table, columns: [sql], predicate: self.predicate),
+            query: SelectQuery(
+                table: self.table,
+                columns: [sql],
+                predicate: self.predicate,
+                groupings: self.groupings,
+                orderings: self.orderings,
+                limitValue: self.limitValue,
+                offsetValue: self.offsetValue
+            ),
             decodeScalar: decodeScalar
         )
     }
