@@ -230,6 +230,7 @@ private enum DatabaseValueBox {
         if let value = value as? DatabaseValue { return value }
         if let value = value as? String { return .string(value) }
         if let value = value as? Bool { return .bool(value) }
+        if let value = value as? Date { return .double(value.timeIntervalSince1970) }
         if let value = value as? Double { return .double(value) }
         if let value = value as? Float { return .double(Double(value)) }
         if let value = value as? Int { return .integer(Int64(value)) }
@@ -355,6 +356,7 @@ private struct DatabaseRowKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingC
     func decode<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
         let value = try self.value(for: key)
         if type == DatabaseValue.self { return value as! T }
+        if type == Date.self { return try value.foundationDate(codingPath: self.codingPath + [key]) as! T }
         if type == Data.self { return try value.data(codingPath: self.codingPath + [key]) as! T }
         if type == Decimal.self { return try value.decimal(codingPath: self.codingPath + [key]) as! T }
         if type == DatabaseDate.self { return try value.date(codingPath: self.codingPath + [key]) as! T }
@@ -427,6 +429,7 @@ private struct DatabaseValueSingleValueDecodingContainer: SingleValueDecodingCon
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
         if type == DatabaseValue.self { return self.value as! T }
+        if type == Date.self { return try self.value.foundationDate(codingPath: self.codingPath) as! T }
         if type == Data.self { return try self.value.data(codingPath: self.codingPath) as! T }
         if type == Decimal.self { return try self.value.decimal(codingPath: self.codingPath) as! T }
         if type == DatabaseDate.self { return try self.value.date(codingPath: self.codingPath) as! T }
@@ -437,6 +440,21 @@ private struct DatabaseValueSingleValueDecodingContainer: SingleValueDecodingCon
 }
 
 private extension DatabaseValue {
+    func foundationDate(codingPath: [CodingKey]) throws -> Date {
+        switch self {
+        case let .double(value): return Date(timeIntervalSince1970: value)
+        case let .integer(value): return Date(timeIntervalSince1970: TimeInterval(value))
+        case let .unsignedInteger(value): return Date(timeIntervalSince1970: TimeInterval(value))
+        case let .decimal(value):
+            if let seconds = TimeInterval(value) { return Date(timeIntervalSince1970: seconds) }
+        case let .string(value):
+            if let seconds = TimeInterval(value) { return Date(timeIntervalSince1970: seconds) }
+        default:
+            break
+        }
+        throw self.typeMismatch(Date.self, codingPath: codingPath)
+    }
+
     func bool(codingPath: [CodingKey]) throws -> Bool {
         switch self {
         case let .bool(value): return value

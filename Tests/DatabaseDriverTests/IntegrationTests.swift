@@ -33,6 +33,11 @@ private struct CodablePerson: Codable, Equatable {
     let payload: Data
 }
 
+private struct CodableTimestampedEvent: Codable, Equatable {
+    let name: String
+    let occurredAt: Date
+}
+
 private struct CodablePersonPatch: Encodable {
     let nickname: String?
 }
@@ -258,6 +263,34 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(try connection.scalar(table.select(objectSignedValue.max)), -42)
         XCTAssertEqual(try connection.scalar(table.select(objectDoubleValue.average)), 3.5)
         XCTAssertEqual(try connection.scalar(table.select(objectDoubleValue.sum)), 3.5)
+
+        let events = Table("events")
+        let eventID = events.column("id", as: Int64.self)
+        let eventName = events.column("name", as: String.self)
+        let occurredAt = events.column("occurredAt", as: Date.self)
+        try connection.run(events.drop(ifExists: true))
+        try connection.run(events.create(ifNotExists: true) { table in
+            table.column(eventID, primaryKey: .autoIncrement)
+            table.column(eventName, type: .varchar(255))
+            table.column(occurredAt)
+        })
+        let expectedDate = Date(timeIntervalSince1970: 1_720_000_000.25)
+        let eventInsert = try connection.run(try events.insert(CodableTimestampedEvent(name: "boot", occurredAt: expectedDate)))
+        XCTAssertEqual(eventInsert.affectedRows, 1)
+        let decodedEvents = try connection.prepare(
+            events
+                .filter(eventID == Int64(eventInsert.lastInsertID))
+                .select(eventName, occurredAt),
+            as: CodableTimestampedEvent.self
+        )
+        XCTAssertEqual(decodedEvents, [CodableTimestampedEvent(name: "boot", occurredAt: expectedDate)])
+        let storedTimestamp = try connection.prepare(
+            events
+                .filter(eventID == Int64(eventInsert.lastInsertID))
+                .select(Expression<Double>("occurredAt"))
+        )
+        XCTAssertEqual(storedTimestamp.first?.double("occurredAt"), expectedDate.timeIntervalSince1970)
+        try connection.run(events.drop(ifExists: true))
 
         let missingNickname: String? = nil
         let objectUpdate = try connection.run(table.update(objectNickname <- missingNickname).filter(objectID == Int64(objectInsert.lastInsertID)))

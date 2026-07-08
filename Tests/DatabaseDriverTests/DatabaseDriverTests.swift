@@ -15,6 +15,11 @@ private struct CodableUserPatch: Encodable {
     let nickname: String?
 }
 
+private struct CodableEvent: Codable, Equatable {
+    let name: String
+    let occurredAt: Date
+}
+
 private struct SchemaUser: DatabaseSchemaRepresentable {
     let id: Int64
     let name: String
@@ -33,6 +38,14 @@ private struct SchemaUserSample {
     let id: Int64
     let name: String
     let payload: Data?
+}
+
+private struct SchemaEvent: DatabaseSchemaRepresentable {
+    let occurredAt: Date
+
+    init() {
+        self.occurredAt = Date(timeIntervalSince1970: 1_720_000_000.25)
+    }
 }
 
 final class DatabaseDriverTests: XCTestCase {
@@ -124,6 +137,17 @@ final class DatabaseDriverTests: XCTestCase {
         XCTAssertEqual(create.sql, "CREATE TABLE IF NOT EXISTS `users` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT NOT NULL, `email` VARCHAR(255) NOT NULL UNIQUE, `name` TEXT, `enabled` BOOL NOT NULL DEFAULT TRUE, `created_at` DATETIME(6) NOT NULL, CHECK (`id` > 0))")
     }
 
+    func testSchemaAPIMapsDateToDoubleSQL() throws {
+        let events = Table("events")
+        let occurredAt = events.column("occurred_at", as: Date.self)
+
+        let create = events.create(ifNotExists: true) { table in
+            table.column(occurredAt)
+        }
+
+        XCTAssertEqual(create.sql, "CREATE TABLE IF NOT EXISTS `events` (`occurred_at` DOUBLE NOT NULL)")
+    }
+
     func testSchemaAPIBuildsIndexesAndDropSQL() throws {
         let users = Table("users")
         let email = users.column("email", as: String.self)
@@ -211,6 +235,15 @@ final class DatabaseDriverTests: XCTestCase {
         )
     }
 
+    func testSchemaAPIBuildsCreateTableFromDateTypeSQL() throws {
+        let events = Table("events")
+
+        XCTAssertEqual(
+            events.create(from: SchemaEvent.self, ifNotExists: true).sql,
+            "CREATE TABLE IF NOT EXISTS `events` (`occurredAt` DOUBLE NOT NULL)"
+        )
+    }
+
     func testSchemaAPIBuildsCreateTableFromTypeWithOverridesSQL() throws {
         let users = Table("car_users")
 
@@ -256,6 +289,16 @@ final class DatabaseDriverTests: XCTestCase {
         )
     }
 
+    func testCodableAPIBuildsDateInsertSQL() throws {
+        let events = Table("events")
+        let event = CodableEvent(name: "boot", occurredAt: Date(timeIntervalSince1970: 1_720_000_000.25))
+
+        XCTAssertEqual(
+            try events.insert(event).sql,
+            "INSERT INTO `events` (`name`, `occurredAt`) VALUES ('boot', 1720000000.25)"
+        )
+    }
+
     func testCodableAPIDecodesRows() throws {
         let row = DatabaseRow(
             values: [],
@@ -279,6 +322,22 @@ final class DatabaseDriverTests: XCTestCase {
                 birthday: DatabaseDate(year: 2026, month: 5, day: 19),
                 payload: Data([0x68, 0x69])
             )
+        )
+    }
+
+    func testCodableAPIDecodesDateRows() throws {
+        let timestamp = 1_720_000_000.25
+        let row = DatabaseRow(
+            values: [],
+            valuesByColumn: [
+                "name": .string("boot"),
+                "occurredAt": .double(timestamp)
+            ]
+        )
+
+        XCTAssertEqual(
+            try row.decode(CodableEvent.self),
+            CodableEvent(name: "boot", occurredAt: Date(timeIntervalSince1970: timestamp))
         )
     }
 

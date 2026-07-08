@@ -50,6 +50,10 @@ extension Data: DatabaseExpressionValue {
     public var databaseValue: DatabaseValue { .bytes(self) }
 }
 
+extension Date: DatabaseExpressionValue {
+    public var databaseValue: DatabaseValue { .double(self.timeIntervalSince1970) }
+}
+
 extension DatabaseDate: DatabaseExpressionValue {
     public var databaseValue: DatabaseValue { .date(self) }
 }

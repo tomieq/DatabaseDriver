@@ -563,6 +563,24 @@ let users = try result.decode(User.self)
 
 Codable support is intentionally table-shaped. Top-level models must use keyed containers. Nested keyed containers, unkeyed containers, and single-value top-level rows are not mapped into columns automatically.
 
+Foundation `Date` is supported natively. DatabaseDriver encodes and decodes `Date` values as Unix timestamps in seconds since 1970 stored in MySQL `DOUBLE` columns.
+
+```swift
+struct Event: Codable, Equatable {
+    let name: String
+    let occurredAt: Date
+}
+
+let events = Table("events")
+let occurredAt = events.column("occurredAt", as: Date.self)
+
+try db.run(events.create(ifNotExists: true) { table in
+    table.column(events.column("id", as: Int64.self), primaryKey: .autoIncrement)
+    table.column(events.column("name", as: String.self))
+    table.column(occurredAt)
+})
+```
+
 ## Connection Pools
 
 Use `ConnectionPool` in server applications to bound concurrency and reuse MySQL sessions.
@@ -672,6 +690,8 @@ row["created_at"]
 - `.time(DatabaseTime)`
 - `.dateTime(DatabaseDateTime)`
 
+Native `Date` values are represented through `.double(Double)` using Unix seconds since 1970.
+
 Column metadata is available through `DatabaseColumn`:
 
 ```swift
@@ -687,6 +707,7 @@ Schema inference maps Swift values to MySQL column types:
 - signed integers -> `BIGINT` or related integer types
 - unsigned integers -> unsigned integer types
 - `Double` -> `DOUBLE`
+- `Date` -> `DOUBLE`
 - `String` -> `TEXT` by default
 - `Data` -> `BLOB`
 - `DatabaseDate` -> `DATE`

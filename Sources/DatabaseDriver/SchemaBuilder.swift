@@ -371,6 +371,7 @@ private extension SQLColumnType {
         case is Int64.Type: return .bigInt
         case is UInt64.Type: return .unsignedBigInt
         case is Float.Type, is Double.Type: return .double
+        case is Date.Type: return .double
         case is Decimal.Type: return .decimal(precision: 65, scale: 30)
         case is String.Type: return .text
         case is Data.Type: return .blob
@@ -400,6 +401,7 @@ private extension SQLColumnType {
         case is Int64: return .bigInt
         case is UInt64: return .unsignedBigInt
         case is Float, is Double: return .double
+        case is Date: return .double
         case is Decimal: return .decimal(precision: 65, scale: 30)
         case is String: return .text
         case is Data: return .blob
@@ -417,6 +419,9 @@ private extension SQLColumnType {
         if typeName.contains("UInt64") { return .unsignedBigInt }
         if typeName.contains("UInt") { return .unsignedInt }
         if typeName.contains("Int") { return .int }
+        if typeName.contains("Optional<Foundation.Date>") || typeName.contains("Swift.Optional<Foundation.Date>") {
+            return .double
+        }
         if typeName.contains("Float") || typeName.contains("Double") { return .double }
         if typeName.contains("Decimal") { return .decimal(precision: 65, scale: 30) }
         if typeName.contains("String") { return .text }
