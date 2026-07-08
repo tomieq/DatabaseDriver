@@ -274,7 +274,7 @@ final class IntegrationTests: XCTestCase {
             table.column(eventName, type: .varchar(255))
             table.column(occurredAt)
         })
-        let expectedDate = Date(timeIntervalSince1970: 1_720_000_000.25)
+        let expectedDate = Date(timeIntervalSince1970: 1_720_000_000)
         let eventInsert = try connection.run(try events.insert(CodableTimestampedEvent(name: "boot", occurredAt: expectedDate)))
         XCTAssertEqual(eventInsert.affectedRows, 1)
         let decodedEvents = try connection.prepare(
@@ -287,9 +287,9 @@ final class IntegrationTests: XCTestCase {
         let storedTimestamp = try connection.prepare(
             events
                 .filter(eventID == Int64(eventInsert.lastInsertID))
-                .select(Expression<Double>("occurredAt"))
+                .select(Expression<Int64>("occurredAt"))
         )
-        XCTAssertEqual(storedTimestamp.first?.double("occurredAt"), expectedDate.timeIntervalSince1970)
+        XCTAssertEqual(storedTimestamp.first?.integer("occurredAt"), Int64(expectedDate.timeIntervalSince1970))
         try connection.run(events.drop(ifExists: true))
 
         let missingNickname: String? = nil

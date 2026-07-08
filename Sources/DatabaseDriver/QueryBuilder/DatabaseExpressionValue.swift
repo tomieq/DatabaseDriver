@@ -51,7 +51,7 @@ extension Data: DatabaseExpressionValue {
 }
 
 extension Date: DatabaseExpressionValue {
-    public var databaseValue: DatabaseValue { .double(self.timeIntervalSince1970) }
+    public var databaseValue: DatabaseValue { .integer(Int64(self.timeIntervalSince1970)) }
 }
 
 extension DatabaseDate: DatabaseExpressionValue {

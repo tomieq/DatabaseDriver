@@ -230,7 +230,7 @@ private enum DatabaseValueBox {
         if let value = value as? DatabaseValue { return value }
         if let value = value as? String { return .string(value) }
         if let value = value as? Bool { return .bool(value) }
-        if let value = value as? Date { return .double(value.timeIntervalSince1970) }
+        if let value = value as? Date { return .integer(Int64(value.timeIntervalSince1970)) }
         if let value = value as? Double { return .double(value) }
         if let value = value as? Float { return .double(Double(value)) }
         if let value = value as? Int { return .integer(Int64(value)) }
@@ -442,9 +442,9 @@ private struct DatabaseValueSingleValueDecodingContainer: SingleValueDecodingCon
 private extension DatabaseValue {
     func foundationDate(codingPath: [CodingKey]) throws -> Date {
         switch self {
-        case let .double(value): return Date(timeIntervalSince1970: value)
         case let .integer(value): return Date(timeIntervalSince1970: TimeInterval(value))
         case let .unsignedInteger(value): return Date(timeIntervalSince1970: TimeInterval(value))
+        case let .double(value): return Date(timeIntervalSince1970: value)
         case let .decimal(value):
             if let seconds = TimeInterval(value) { return Date(timeIntervalSince1970: seconds) }
         case let .string(value):
