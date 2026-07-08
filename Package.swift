@@ -19,7 +19,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/tomieq/SwiftExtensions", from: "2.0.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", .upToNextMajor(from: "3.12.3"))
+        .package(url: "https://github.com/apple/swift-crypto.git", .upToNextMajor(from: "3.12.3")),
+        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.3.0")
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -28,7 +29,8 @@ let package = Package(
             name: "DatabaseDriver",
             dependencies: [
                 .product(name: "SwiftExtensions", package: "SwiftExtensions"),
-                .product(name: "Crypto", package: "swift-crypto")
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "BigInt", package: "BigInt")
             ]
         ),
         .testTarget(

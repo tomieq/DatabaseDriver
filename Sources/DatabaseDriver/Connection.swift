@@ -98,6 +98,10 @@ public final class Connection: @unchecked Sendable {
                 // OK
                 proto.resetSequence()
                 return
+            } else if first == 0x01 {
+                try self.handleAuthMoreData(resp, handshake: serverHandshake, proto: proto)
+                proto.resetSequence()
+                return
             } else if first == 0xFF {
                 let (code, msg) = MySQLProtocol.parseErrorPacket(resp)
                 throw ConnectionError.serverError(code: code, message: msg)
@@ -135,6 +139,53 @@ public final class Connection: @unchecked Sendable {
                 }
             }
         }
+        throw ConnectionError.protocolError("unexpected auth response")
+    }
+
+    private func handleAuthMoreData(_ packet: [UInt8], handshake: ServerHandshake, proto: MySQLProtocol) throws {
+        guard packet.count == 2 else {
+            throw ConnectionError.protocolError("unexpected auth more data packet")
+        }
+
+        switch packet[1] {
+        case CachingSHA2Password.fastAuthSuccess:
+            let finalResponse = try proto.readPacket()
+            try self.handleFinalAuthResponse(finalResponse, proto: proto)
+        case CachingSHA2Password.performFullAuthentication:
+            try proto.writePacket([CachingSHA2Password.requestPublicKey])
+            let publicKeyPacket = try proto.readPacket()
+            let publicKeyPayload: Data
+            if publicKeyPacket.first == 0x01 {
+                publicKeyPayload = Data(publicKeyPacket.dropFirst())
+            } else {
+                publicKeyPayload = Data(publicKeyPacket)
+            }
+            let encryptedPassword = try CachingSHA2Password.encryptedPassword(
+                self.config.password,
+                scramble: handshake.scramble,
+                publicKeyPEM: publicKeyPayload
+            )
+            try proto.writePacket(encryptedPassword.array)
+            let finalResponse = try proto.readPacket()
+            try self.handleFinalAuthResponse(finalResponse, proto: proto)
+        default:
+            throw ConnectionError.protocolError("unexpected auth more data status")
+        }
+    }
+
+    private func handleFinalAuthResponse(_ packet: [UInt8], proto: MySQLProtocol) throws {
+        guard let first = packet.first else {
+            throw ConnectionError.protocolError("empty auth response")
+        }
+
+        if first == 0x00 {
+            return
+        }
+        if first == 0xFF {
+            let (code, msg) = MySQLProtocol.parseErrorPacket(packet)
+            throw ConnectionError.serverError(code: code, message: msg)
+        }
+
         throw ConnectionError.protocolError("unexpected auth response")
     }
 

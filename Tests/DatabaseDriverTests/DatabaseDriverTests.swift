@@ -66,6 +66,15 @@ final class DatabaseDriverTests: XCTestCase {
         )
     }
 
+    func testCachingSHA2FullAuthObfuscatesTrailingNull() throws {
+        let obfuscated = CachingSHA2Password.obfuscatedPassword(
+            "pw",
+            scramble: Data([0x11, 0x22, 0x33])
+        )
+
+        XCTAssertEqual(obfuscated, Data([0x61, 0x55, 0x33]))
+    }
+
     func testObjectAPIBuildsSelectSQL() throws {
         let users = Table("users")
         let id = Expression<Int64>("id")
